@@ -1,0 +1,92 @@
+from decimal import Decimal
+from typing import Optional
+
+from hummingbot.client.config.config_validators import (
+    validate_decimal,
+    validate_exchange,
+    validate_int,
+    validate_market_trading_pair,
+)
+from hummingbot.client.config.config_var import ConfigVar
+from hummingbot.client.settings import AllConnectorSettings, required_exchanges
+
+
+def exchange_on_validated(value: str):
+    required_exchanges.append(value)
+
+
+def maker_trading_pair_prompt():
+    exchange = hunger_config_map.get("exchange").value
+    example = AllConnectorSettings.get_example_pairs().get(exchange)
+    return "Enter the token trading pair you would like to trade on %s%s >>> " % (
+        exchange,
+        f" (e.g. {example})" if example else "",
+    )
+
+
+# strategy specific validators
+def validate_exchange_trading_pair(value: str) -> Optional[str]:
+    exchange = hunger_config_map.get("exchange").value
+    return validate_market_trading_pair(exchange, value)
+
+
+# Returns a market prompt that incorporates the connector value set by the user
+def market_prompt() -> str:
+    exchange = hunger_config_map.get("exchange").value
+    return f"Enter the token trading pair on {exchange} >>> "
+
+
+def order_amount_prompt() -> str:
+    trading_pair = hunger_config_map.get("market").value
+    base_asset, quote_asset = trading_pair.split("-")
+    return f"What is the amount of {base_asset} per order? >>> "
+
+
+# List of parameters defined by the strategy
+hunger_config_map = {
+    "strategy": ConfigVar(
+        key="strategy",
+        prompt="",
+        default="hunger",
+    ),
+    "exchange": ConfigVar(
+        key="exchange",
+        prompt="Enter the name of the exchange >>> ",
+        prompt_on_new=True,
+        validator=validate_exchange,
+        on_validated=exchange_on_validated,
+    ),
+    "market": ConfigVar(
+        key="market",
+        prompt=market_prompt,
+        validator=validate_exchange_trading_pair,
+        prompt_on_new=True,
+    ),
+    "order_amount": ConfigVar(
+        key="order_amount",
+        prompt=order_amount_prompt,
+        prompt_on_new=True,
+        type_str="decimal",
+        validator=lambda v: validate_decimal(
+            v,
+            min_value=Decimal("0"),
+            inclusive=False,
+        ),
+    ),
+    "bid_level": ConfigVar(
+        key="bid_level",
+        prompt="What is the bid level on the order book (1 means best bid)? >>> ",
+        prompt_on_new=True,
+        type_str="int",
+        validator=lambda v: validate_int(v, min_value=1),
+        default=5,
+    ),
+    "ask_level": ConfigVar(
+        key="ask_level",
+        prompt="What is the ask level on on order book (1 means best ask)? >>> ",
+        prompt_on_new=True,
+        type_str="int",
+        validator=lambda v: validate_int(v, min_value=1),
+        default=5,
+    ),
+}

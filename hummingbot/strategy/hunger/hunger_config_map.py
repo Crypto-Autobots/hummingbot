@@ -89,4 +89,18 @@ hunger_config_map = {
         validator=lambda v: validate_int(v, min_value=1),
         default=5,
     ),
+    "max_order_age": ConfigVar(
+        key="max_order_age",
+        prompt="How long do you want to cancel and replace bids and asks with the same price (in seconds)? >>> ",
+        type_str="int",
+        validator=lambda v: validate_int(v, min_value=0, inclusive=False),
+        default=600,
+    ),
+    "filled_order_delay": ConfigVar(
+        key="filled_order_delay",
+        prompt="How long do you want to wait before placing the next order if your order gets filled (in seconds)? >>> ",
+        type_str="int",
+        validator=lambda v: validate_int(v, min_value=0, inclusive=False),
+        default=300,
+    ),
 }

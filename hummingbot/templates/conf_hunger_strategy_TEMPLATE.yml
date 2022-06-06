@@ -5,3 +5,5 @@ market: null
 order_amount: null
 bid_level: 5
 ask_level: 5
+max_order_age: 600
+filled_order_delay: 300

@@ -4,7 +4,11 @@ import logging
 from decimal import Decimal
 from typing import Dict, List
 
+from pandas import DataFrame
+
+from hummingbot.connector.exchange_base import ExchangeBase
 from hummingbot.core.data_type.limit_order import LimitOrder
+from hummingbot.core.data_type.order_book import OrderBook
 from hummingbot.core.event.events import OrderType, TradeType
 from hummingbot.logger import HummingbotLogger
 from hummingbot.strategy.market_trading_pair_tuple import MarketTradingPairTuple
@@ -82,19 +86,19 @@ class HungerStrategy(StrategyPyBase):
             self.execute_orders_proposal(proposal)
 
     @property
-    def market(self):
+    def market(self) -> ExchangeBase:
         return self._market_info.market
 
     @property
-    def base_asset(self):
+    def base_asset(self) -> str:
         return self._market_info.base_asset
 
     @property
-    def quote_asset(self):
+    def quote_asset(self) -> str:
         return self._market_info.quote_asset
 
     @property
-    def trading_pair(self):
+    def trading_pair(self) -> str:
         return self._market_info.trading_pair
 
     @property
@@ -117,6 +121,22 @@ class HungerStrategy(StrategyPyBase):
     def active_sells(self) -> List[LimitOrder]:
         return [o for o in self.active_orders if not o.is_buy]
 
+    @property
+    def in_flight_cancels(self) -> Dict[str, float]:
+        return self._sb_order_tracker.in_flight_cancels
+
+    @property
+    def order_book(self) -> OrderBook:
+        return self._market_info.order_book
+
+    @property
+    def asks_df(self) -> DataFrame:
+        return self.order_book.snapshot[1]
+
+    @property
+    def bids_df(self) -> DataFrame:
+        return self.order_book.snapshot[0]
+
     def create_base_proposal(self):
         """
         Create base proposal with price at bid_level and ask_level from order book
@@ -125,19 +145,11 @@ class HungerStrategy(StrategyPyBase):
         sells = []
 
         # bid_price proposal
-        bid_price = Decimal(
-            str(
-                self._market_info.order_book.snapshot[0].price.iloc[self._bid_level - 1]
-            )
-        )
+        bid_price = Decimal(str(self.bids_df["price"].iloc[self._bid_level - 1]))
         buys.append(PriceSize(bid_price, self._order_amount))
 
         # ask_price proposal
-        ask_price = Decimal(
-            str(
-                self._market_info.order_book.snapshot[1].price.iloc[self._ask_level - 1]
-            )
-        )
+        ask_price = Decimal(str(self.asks_df["price"].iloc[self._ask_level - 1]))
         sells.append(PriceSize(ask_price, self._order_amount))
 
         base_proposal = Proposal(buys, sells)
@@ -206,6 +218,10 @@ class HungerStrategy(StrategyPyBase):
 
         self.logger().debug(f"Applied budget constraint to proposal: {proposal}")
 
+    def _cancel_active_orders(self):
+        for order in self.active_orders:
+            self.cancel_order(self._market_info, order.client_order_id)
+
     def cancel_active_orders_on_max_age_limit(self):
         """
         Cancel active orders if they are older than max age limit
@@ -214,8 +230,7 @@ class HungerStrategy(StrategyPyBase):
             self.active_orders
             and self.current_timestamp - self._created_timestamp > self._max_order_age
         ):
-            for order in self.active_orders:
-                self.cancel_order(self._market_info, order.client_order_id)
+            self._cancel_active_orders()
             self.logger().info("Cancelled active orders due to max_age_limit")
 
     def cancel_active_orders(self, proposal: Proposal):
@@ -235,17 +250,13 @@ class HungerStrategy(StrategyPyBase):
                 active_buy_prices != proposal_buy_prices
                 or active_sell_prices != proposal_sell_prices
             ):
-                for order in self.active_orders:
-                    self.cancel_order(self._market_info, order.client_order_id)
+                self._cancel_active_orders()
 
     def to_create_orders(self, proposal: Proposal):
         return (
             proposal is not None
-            and len(self._sb_order_tracker.in_flight_cancels) == 0
-            and (
-                len(self._sb_order_tracker.active_asks) == 0
-                or len(self._sb_order_tracker.active_bids) == 0
-            )
+            and len(self.in_flight_cancels) == 0
+            and (len(self.active_buys) == 0 or len(self.active_sells) == 0)
         )
 
     def execute_orders_proposal(self, proposal: Proposal):
@@ -279,8 +290,13 @@ class HungerStrategy(StrategyPyBase):
 
     def did_complete_buy_order(self, order_completed_event):
         self.logger().info(order_completed_event)
+        self._cancel_active_orders()
         self._create_timestamp = self.current_timestamp + self._filled_order_delay
 
     def did_complete_sell_order(self, order_completed_event):
         self.logger().info(order_completed_event)
+        self._cancel_active_orders()
         self._create_timestamp = self.current_timestamp + self._filled_order_delay
+
+    def did_cancel_order(self, cancelled_event):
+        self._cancel_active_orders()

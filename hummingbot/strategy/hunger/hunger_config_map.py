@@ -37,9 +37,14 @@ def market_prompt() -> str:
 
 
 def order_amount_prompt() -> str:
-    trading_pair = hunger_config_map.get("market").value
-    base_asset, quote_asset = trading_pair.split("-")
+    base_asset, _ = hunger_config_map.get("market").value.split("-")
     return f"What is the amount of {base_asset} per order? >>> "
+
+
+def budget_allocation_prompt() -> str:
+    trading_pair = hunger_config_map.get("market").value
+    _, quote_asset = trading_pair.split("-")
+    return f"What is the budget allocation for {trading_pair} in {quote_asset}? >>> "
 
 
 # List of parameters defined by the strategy
@@ -65,6 +70,17 @@ hunger_config_map = {
     "order_amount": ConfigVar(
         key="order_amount",
         prompt=order_amount_prompt,
+        prompt_on_new=True,
+        type_str="decimal",
+        validator=lambda v: validate_decimal(
+            v,
+            min_value=Decimal("0"),
+            inclusive=False,
+        ),
+    ),
+    "budget_allocation": ConfigVar(
+        key="budget_allocation",
+        prompt=budget_allocation_prompt,
         prompt_on_new=True,
         type_str="decimal",
         validator=lambda v: validate_decimal(

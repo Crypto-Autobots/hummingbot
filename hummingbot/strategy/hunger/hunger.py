@@ -3,13 +3,11 @@
 import logging
 from datetime import datetime
 from decimal import Decimal
-from math import ceil
 from typing import Dict, List
 
 from pandas import DataFrame
 
 from hummingbot.connector.exchange_base import ExchangeBase
-from hummingbot.connector.trading_rule import TradingRule
 from hummingbot.core.data_type.limit_order import LimitOrder
 from hummingbot.core.data_type.order_book import OrderBook
 from hummingbot.core.event.events import OrderType, TradeType
@@ -19,6 +17,7 @@ from hummingbot.strategy.pure_market_making.pure_market_making import PriceSize,
 from hummingbot.strategy.strategy_py_base import StrategyPyBase
 
 s_decimal_zero = Decimal("0")
+s_decimal_15 = Decimal("15")
 hws_logger = None
 
 
@@ -86,10 +85,6 @@ class HungerStrategy(StrategyPyBase):
         return self._market_info.trading_pair
 
     @property
-    def trading_rules(self) -> TradingRule:
-        return self.market.trading_rules[self.trading_pair]
-
-    @property
     def market_info_to_active_orders(
         self,
     ) -> Dict[MarketTradingPairTuple, List[LimitOrder]]:
@@ -153,38 +148,22 @@ class HungerStrategy(StrategyPyBase):
 
     @property
     def min_base_amount(self) -> Decimal:
-        """
-        Add 50% more to prevent slippage
-        - 5 --> 7.5
-        - 10 --> 15
-        """
-        return ceil(self.trading_rules.min_notional_size / self.mid_price) * Decimal(
-            "1.5"
-        )
+        return self.min_quote_amount / self.mid_price
 
     @property
     def min_quote_amount(self) -> Decimal:
-        """
-        Add 50% more to prevent slippage
-        - 5 --> 7.5
-        - 10 --> 15
-        """
-        return self.trading_rules.min_notional_size * Decimal("1.5")
+        return s_decimal_15
 
     # After initializing the required variables, we define the tick method.
     # The tick method is the entry point for the strategy.
     def tick(self, timestamp: float):
         if not self._exchange_ready:
-            self._exchange_ready = self._market_info.market.ready
+            self._exchange_ready = self.market.ready
             if not self._exchange_ready:
-                self.logger().warning(
-                    f"{self._market_info.market.name} is not ready. Please wait..."
-                )
+                self.logger().warning(f"{self.market.name} is not ready. Please wait...")
                 return
             else:
-                self.logger().warning(
-                    f"{self._market_info.market.name} is ready. Trading started"
-                )
+                self.logger().warning(f"{self.market.name} is ready. Trading started")
 
         # Cancel orders by max age policy
         self.cancel_active_orders_by_max_order_age()
@@ -246,19 +225,11 @@ class HungerStrategy(StrategyPyBase):
         base_balance = self._market_info.base_balance
         base_balance_in_quote_asset = base_balance * self.best_bid_price
         quote_balance = self._market_info.quote_balance
-        if (
-            base_balance_in_quote_asset + self.order_amount_in_quote_asset
-            >= self._budget_allocation
-        ):
+        if base_balance_in_quote_asset + self.order_amount_in_quote_asset >= self._budget_allocation:
             # This allows selling a portion of the base asset
-            self.logger().info(
-                "Exceeded budget allocation of {}".format(self._budget_allocation)
-            )
+            self.logger().info("Exceeded budget allocation of {}".format(self._budget_allocation))
             self.handle_insufficient_quote_balance_error()
-        elif (
-            quote_balance < self.min_quote_amount
-            and base_balance >= self.min_base_amount * 2
-        ):
+        elif quote_balance < self.min_quote_amount and base_balance >= self.min_base_amount * 2:
             # This allows selling a portion of the base asset
             self.logger().info(
                 f"Quote asset balance is too low - {quote_balance} {self.quote_asset}\n"
@@ -266,10 +237,7 @@ class HungerStrategy(StrategyPyBase):
                 f" Order amount: {self.order_amount_in_quote_asset} {self.quote_asset}"
             )
             self.handle_insufficient_quote_balance_error()
-        elif (
-            base_balance < self.min_base_amount
-            and quote_balance >= self.min_quote_amount * 2
-        ):
+        elif base_balance < self.min_base_amount and quote_balance >= self.min_quote_amount * 2:
             # This allows buying a portion of the base asset
             self.logger().info(
                 f"Base asset balance is too low - {base_balance} {self.base_asset}\n"
@@ -366,12 +334,8 @@ class HungerStrategy(StrategyPyBase):
 
             # Adjust buy order amount to use remaining balance if less than the order amount
             if quote_balance < quote_amount:
-                adjusted_amount = quote_balance / (
-                    buy.price * (Decimal("1") + buy_fee.percent)
-                )
-                adjusted_amount = self.market.quantize_order_amount(
-                    self.trading_pair, adjusted_amount
-                )
+                adjusted_amount = quote_balance / (buy.price * (Decimal("1") + buy_fee.percent))
+                adjusted_amount = self.market.quantize_order_amount(self.trading_pair, adjusted_amount)
                 buy.size = adjusted_amount
                 quote_balance = s_decimal_zero
             elif quote_balance == s_decimal_zero:
@@ -387,9 +351,7 @@ class HungerStrategy(StrategyPyBase):
 
             # Adjust sell order amount to use remaining balance if less than the order amount
             if base_balance < base_amount:
-                adjusted_amount = self.market.quantize_order_amount(
-                    self.trading_pair, base_balance
-                )
+                adjusted_amount = self.market.quantize_order_amount(self.trading_pair, base_balance)
                 sell.size = adjusted_amount
                 base_balance = s_decimal_zero
             elif base_balance == s_decimal_zero:
@@ -424,19 +386,12 @@ class HungerStrategy(StrategyPyBase):
         """
         Cancel active orders, checks if the order prices are at correct levels
         """
-        if (
-            proposal is not None
-            and len(self.active_buys) > 0
-            and len(self.active_sells) > 0
-        ):
+        if proposal is not None and len(self.active_buys) > 0 and len(self.active_sells) > 0:
             active_buy_prices = [Decimal(str(o.price)) for o in self.active_buys]
             active_sell_prices = [Decimal(str(o.price)) for o in self.active_sells]
             proposal_buy_prices = [buy.price for buy in proposal.buys]
             proposal_sell_prices = [sell.price for sell in proposal.sells]
-            if (
-                active_buy_prices != proposal_buy_prices
-                or active_sell_prices != proposal_sell_prices
-            ):
+            if active_buy_prices != proposal_buy_prices or active_sell_prices != proposal_sell_prices:
                 self._cancel_active_orders()
 
     def to_create_orders(self, proposal: Proposal):
@@ -503,6 +458,4 @@ class HungerStrategy(StrategyPyBase):
         else:
             self._create_timestamp = self.current_timestamp + self._filled_order_delay
             until = datetime.fromtimestamp(self._create_timestamp)
-            self.notify_hb_app_with_timestamp(
-                f"Shielded up until {until} {until.astimezone().tzname()}."
-            )
+            self.notify_hb_app_with_timestamp(f"Shielded up until {until} {until.astimezone().tzname()}.")

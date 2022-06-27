@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from hummingbot.pmm_script.pmm_script_base import PMMScriptBase
 
-MIN_VOLATILITY_PCT = Decimal("0.3")  # in percentage
+MIN_VOLATILITY_PCT = Decimal("0.2")  # in percentage
 ORDERS_DELAY = 60  # in seconds
 
 
@@ -11,7 +11,7 @@ class OrdersAdjustedOnVolatilityScript(PMMScriptBase):
     _create_timestamp = 0
 
     def on_tick(self):
-        if self.mid_price_change_pct > self.pmm_parameters.order_refresh_tolerance_pct:
+        if self.mid_price_change_pct > MIN_VOLATILITY_PCT:
             self._create_timestamp = self.current_timestamp + ORDERS_DELAY
             self.log(self.volatility_msg)
             self.notify(self.volatility_msg)

@@ -5,16 +5,18 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Dict, List
 
-from pandas import DataFrame
+import pandas as pd
 
 from hummingbot.connector.exchange_base import ExchangeBase
 from hummingbot.core.data_type.limit_order import LimitOrder
 from hummingbot.core.data_type.order_book import OrderBook
 from hummingbot.core.event.events import OrderType, TradeType
+from hummingbot.core.utils import map_df_to_str
 from hummingbot.logger import HummingbotLogger
 from hummingbot.strategy.market_trading_pair_tuple import MarketTradingPairTuple
 from hummingbot.strategy.pure_market_making.pure_market_making import PriceSize, Proposal
 from hummingbot.strategy.strategy_py_base import StrategyPyBase
+from hummingbot.strategy.utils import order_age
 
 s_decimal_zero = Decimal("0")
 s_decimal_15 = Decimal("15")
@@ -97,6 +99,29 @@ class HungerStrategy(StrategyPyBase):
         return []
 
     @property
+    def active_orders_data_frame(self) -> pd.DataFrame:
+        active_orders = self.active_orders
+        active_orders.sort(key=lambda x: x.price, reverse=True)
+        data = []
+        for order in active_orders:
+            spread = abs(order.price - self.mid_price) / self.mid_price
+            age = pd.Timestamp(
+                order_age(order, self.current_timestamp), unit="s"
+            ).strftime("%H:%M:%S")
+            data.append(
+                [
+                    self._bid_level,
+                    "buy" if order.is_buy else "sell",
+                    float(order.price),
+                    f"{spread:.2%}",
+                    float(order.quantity),
+                    age,
+                ]
+            )
+        columns = ["Level", "Type", "Price", "Spread", "Amount", "Age"]
+        return pd.DataFrame(columns=columns, data=data)
+
+    @property
     def active_buys(self) -> List[LimitOrder]:
         return [o for o in self.active_orders if o.is_buy]
 
@@ -113,11 +138,11 @@ class HungerStrategy(StrategyPyBase):
         return self._market_info.order_book
 
     @property
-    def asks_df(self) -> DataFrame:
+    def asks_df(self) -> pd.DataFrame:
         return self.order_book.snapshot[1]
 
     @property
-    def bids_df(self) -> DataFrame:
+    def bids_df(self) -> pd.DataFrame:
         return self.order_book.snapshot[0]
 
     @property
@@ -160,7 +185,9 @@ class HungerStrategy(StrategyPyBase):
         if not self._exchange_ready:
             self._exchange_ready = self.market.ready
             if not self._exchange_ready:
-                self.logger().warning(f"{self.market.name} is not ready. Please wait...")
+                self.logger().warning(
+                    f"{self.market.name} is not ready. Please wait..."
+                )
                 return
             else:
                 self.logger().warning(f"{self.market.name} is ready. Trading started")
@@ -225,11 +252,19 @@ class HungerStrategy(StrategyPyBase):
         base_balance = self._market_info.base_balance
         base_balance_in_quote_asset = base_balance * self.best_bid_price
         quote_balance = self._market_info.quote_balance
-        if base_balance_in_quote_asset + self.order_amount_in_quote_asset >= self._budget_allocation:
+        if (
+            base_balance_in_quote_asset + self.order_amount_in_quote_asset
+            >= self._budget_allocation
+        ):
             # This allows selling a portion of the base asset
-            self.logger().info("Exceeded budget allocation of {}".format(self._budget_allocation))
+            self.logger().info(
+                "Exceeded budget allocation of {}".format(self._budget_allocation)
+            )
             self.handle_insufficient_quote_balance_error()
-        elif quote_balance < self.min_quote_amount and base_balance >= self.min_base_amount * 2:
+        elif (
+            quote_balance < self.min_quote_amount
+            and base_balance >= self.min_base_amount * 2
+        ):
             # This allows selling a portion of the base asset
             self.logger().info(
                 f"Quote asset balance is too low - {quote_balance} {self.quote_asset}\n"
@@ -237,7 +272,10 @@ class HungerStrategy(StrategyPyBase):
                 f" Order amount: {self.order_amount_in_quote_asset} {self.quote_asset}"
             )
             self.handle_insufficient_quote_balance_error()
-        elif base_balance < self.min_base_amount and quote_balance >= self.min_quote_amount * 2:
+        elif (
+            base_balance < self.min_base_amount
+            and quote_balance >= self.min_quote_amount * 2
+        ):
             # This allows buying a portion of the base asset
             self.logger().info(
                 f"Base asset balance is too low - {base_balance} {self.base_asset}\n"
@@ -334,8 +372,12 @@ class HungerStrategy(StrategyPyBase):
 
             # Adjust buy order amount to use remaining balance if less than the order amount
             if quote_balance < quote_amount:
-                adjusted_amount = quote_balance / (buy.price * (Decimal("1") + buy_fee.percent))
-                adjusted_amount = self.market.quantize_order_amount(self.trading_pair, adjusted_amount)
+                adjusted_amount = quote_balance / (
+                    buy.price * (Decimal("1") + buy_fee.percent)
+                )
+                adjusted_amount = self.market.quantize_order_amount(
+                    self.trading_pair, adjusted_amount
+                )
                 buy.size = adjusted_amount
                 quote_balance = s_decimal_zero
             elif quote_balance == s_decimal_zero:
@@ -351,7 +393,9 @@ class HungerStrategy(StrategyPyBase):
 
             # Adjust sell order amount to use remaining balance if less than the order amount
             if base_balance < base_amount:
-                adjusted_amount = self.market.quantize_order_amount(self.trading_pair, base_balance)
+                adjusted_amount = self.market.quantize_order_amount(
+                    self.trading_pair, base_balance
+                )
                 sell.size = adjusted_amount
                 base_balance = s_decimal_zero
             elif base_balance == s_decimal_zero:
@@ -386,12 +430,19 @@ class HungerStrategy(StrategyPyBase):
         """
         Cancel active orders, checks if the order prices are at correct levels
         """
-        if proposal is not None and len(self.active_buys) > 0 and len(self.active_sells) > 0:
+        if (
+            proposal is not None
+            and len(self.active_buys) > 0
+            and len(self.active_sells) > 0
+        ):
             active_buy_prices = [Decimal(str(o.price)) for o in self.active_buys]
             active_sell_prices = [Decimal(str(o.price)) for o in self.active_sells]
             proposal_buy_prices = [buy.price for buy in proposal.buys]
             proposal_sell_prices = [sell.price for sell in proposal.sells]
-            if active_buy_prices != proposal_buy_prices or active_sell_prices != proposal_sell_prices:
+            if (
+                active_buy_prices != proposal_buy_prices
+                or active_sell_prices != proposal_sell_prices
+            ):
                 self._cancel_active_orders()
 
     def to_create_orders(self, proposal: Proposal):
@@ -458,4 +509,48 @@ class HungerStrategy(StrategyPyBase):
         else:
             self._create_timestamp = self.current_timestamp + self._filled_order_delay
             until = datetime.fromtimestamp(self._create_timestamp)
-            self.notify_hb_app_with_timestamp(f"Shielded up until {until} {until.astimezone().tzname()}.")
+            self.notify_hb_app_with_timestamp(
+                f"Shielded up until {until} {until.astimezone().tzname()}."
+            )
+
+    def format_status(self):
+        """
+        Return the budget, market, miner and order statuses.
+        """
+        if not self._exchange_ready:
+            return "Market connectors are not ready."
+        lines = []
+        warning_lines = []
+        warning_lines.extend(self.network_warning([self._market_info]))
+
+        # Current market data
+        markets_df = map_df_to_str(self.market_status_data_frame([self._market_info]))
+        lines.extend(
+            ["", "  Markets:"]
+            + ["    " + line for line in markets_df.to_string(index=False).split("\n")]
+        )
+
+        # Current trading balance
+        wallet_df = map_df_to_str(self.wallet_balance_data_frame([self._market_info]))
+        lines.extend(
+            ["", "  Balance:"]
+            + ["    " + line for line in wallet_df.to_string(index=False).split("\n")]
+        )
+
+        # Current active orders
+        if len(self.active_orders) > 0:
+            orders_df = map_df_to_str(self.active_orders_data_frame)
+            lines.extend(
+                ["", "  Orders:"]
+                + [
+                    "    " + line
+                    for line in orders_df.to_string(index=False).split("\n")
+                ]
+            )
+        else:
+            lines.extend(["", "  No active maker orders."])
+
+        warning_lines.extend(self.balance_warning([self._market_info]))
+        if len(warning_lines) > 0:
+            lines.extend(["", "*** WARNINGS ***"] + warning_lines)
+        return "\n".join(lines)

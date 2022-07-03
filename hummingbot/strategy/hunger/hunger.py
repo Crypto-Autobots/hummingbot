@@ -8,6 +8,7 @@ from typing import Dict, List
 import pandas as pd
 
 from hummingbot.connector.exchange_base import ExchangeBase
+from hummingbot.connector.trading_rule import TradingRule
 from hummingbot.core.data_type.limit_order import LimitOrder
 from hummingbot.core.data_type.order_book import OrderBook
 from hummingbot.core.event.events import OrderType, TradeType
@@ -19,7 +20,6 @@ from hummingbot.strategy.strategy_py_base import StrategyPyBase
 from hummingbot.strategy.utils import order_age
 
 s_decimal_zero = Decimal("0")
-s_decimal_15 = Decimal("15")
 hws_logger = None
 
 
@@ -176,8 +176,12 @@ class HungerStrategy(StrategyPyBase):
         return self.min_quote_amount / self.mid_price
 
     @property
+    def trading_rule(self) -> TradingRule:
+        return self.market.trading_rules[self.trading_pair]
+
+    @property
     def min_quote_amount(self) -> Decimal:
-        return s_decimal_15
+        return self.trading_rule.min_order_size * Decimal("1.5")
 
     # After initializing the required variables, we define the tick method.
     # The tick method is the entry point for the strategy.

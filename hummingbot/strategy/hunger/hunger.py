@@ -181,6 +181,8 @@ class HungerStrategy(StrategyPyBase):
 
     @property
     def min_quote_amount(self) -> Decimal:
+        if self.quote_asset == "USDT":
+            return Decimal("15")
         return self.trading_rule.min_order_size * Decimal("1.5")
 
     # After initializing the required variables, we define the tick method.

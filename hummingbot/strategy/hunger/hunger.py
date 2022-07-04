@@ -19,7 +19,7 @@ from hummingbot.strategy.pure_market_making.pure_market_making import PriceSize,
 from hummingbot.strategy.strategy_py_base import StrategyPyBase
 from hummingbot.strategy.utils import order_age
 
-s_decimal_zero = Decimal("0")
+DECIMAL_ZERO = Decimal("0")
 hws_logger = None
 
 
@@ -181,9 +181,13 @@ class HungerStrategy(StrategyPyBase):
 
     @property
     def min_quote_amount(self) -> Decimal:
-        if self.quote_asset == "USDT":
-            return Decimal("15")
-        return self.trading_rule.min_order_size * Decimal("1.5")
+        if self.trading_rule.min_order_size > DECIMAL_ZERO:
+            # For pairs of coin-coin, ex: VSP-ETH, HMT-ETH
+            amount = self.trading_rule.min_order_size
+        else:
+            # For paris of coin-stable, ex: AVAX-USDT
+            amount = self.trading_rule.min_notional_size
+        return amount * Decimal("1.5")
 
     # After initializing the required variables, we define the tick method.
     # The tick method is the entry point for the strategy.
@@ -255,9 +259,9 @@ class HungerStrategy(StrategyPyBase):
         """
         Reallocate quote & base assets to be able to create both BUY and SELL orders
         """
-        base_balance = self._market_info.base_balance
+        base_balance = self.market.get_available_balance(self.base_asset)
         base_balance_in_quote_asset = base_balance * self.best_bid_price
-        quote_balance = self._market_info.quote_balance
+        quote_balance = self.market.get_available_balance(self.quote_asset)
         if (
             base_balance_in_quote_asset + self.order_amount_in_quote_asset
             >= self._budget_allocation
@@ -363,8 +367,22 @@ class HungerStrategy(StrategyPyBase):
         Calculate available budget on each asset for multiple levels of orders
         """
         base_balance = self.market.get_available_balance(self.base_asset)
-        quote_balance = self.market.get_available_balance(self.quote_asset)
+        for sell in proposal.sells:
+            base_amount = sell.size
 
+            # Adjust sell order amount to use remaining balance if less than the order amount
+            if base_balance < base_amount:
+                adjusted_amount = self.market.quantize_order_amount(
+                    self.trading_pair, base_balance
+                )
+                sell.size = adjusted_amount
+                base_balance = DECIMAL_ZERO
+            elif base_balance == DECIMAL_ZERO:
+                sell.size = DECIMAL_ZERO
+            else:
+                base_balance -= base_amount
+
+        quote_balance = self.market.get_available_balance(self.quote_asset)
         for buy in proposal.buys:
             buy_fee = self.market.get_fee(
                 self.base_asset,
@@ -385,32 +403,15 @@ class HungerStrategy(StrategyPyBase):
                     self.trading_pair, adjusted_amount
                 )
                 buy.size = adjusted_amount
-                quote_balance = s_decimal_zero
-            elif quote_balance == s_decimal_zero:
-                buy.size = s_decimal_zero
+                quote_balance = DECIMAL_ZERO
+            elif quote_balance == DECIMAL_ZERO:
+                buy.size = DECIMAL_ZERO
             else:
                 quote_balance -= quote_amount
 
-        # Filter for valid buys
-        proposal.buys = [o for o in proposal.buys if o.size > 0]
-
-        for sell in proposal.sells:
-            base_amount = sell.size
-
-            # Adjust sell order amount to use remaining balance if less than the order amount
-            if base_balance < base_amount:
-                adjusted_amount = self.market.quantize_order_amount(
-                    self.trading_pair, base_balance
-                )
-                sell.size = adjusted_amount
-                base_balance = s_decimal_zero
-            elif base_balance == s_decimal_zero:
-                sell.size = s_decimal_zero
-            else:
-                base_balance -= base_amount
-
-        # Filter for valid sells
+        # Filter for valid proposals
         proposal.sells = [o for o in proposal.sells if o.size > 0]
+        proposal.buys = [o for o in proposal.buys if o.size > 0]
 
         self.logger().debug(f"Applied budget constraint to proposal: {proposal}")
 

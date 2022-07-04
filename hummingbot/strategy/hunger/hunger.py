@@ -259,9 +259,9 @@ class HungerStrategy(StrategyPyBase):
         """
         Reallocate quote & base assets to be able to create both BUY and SELL orders
         """
-        base_balance = self.market.get_available_balance(self.base_asset)
+        base_balance = self._market_info.base_balance
         base_balance_in_quote_asset = base_balance * self.best_bid_price
-        quote_balance = self.market.get_available_balance(self.quote_asset)
+        quote_balance = self._market_info.quote_balance
         if (
             base_balance_in_quote_asset + self.order_amount_in_quote_asset
             >= self._budget_allocation

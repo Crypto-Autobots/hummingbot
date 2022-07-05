@@ -95,7 +95,7 @@ hunger_config_map = {
         prompt_on_new=True,
         type_str="int",
         validator=lambda v: validate_int(v, min_value=1),
-        default=5,
+        default=3,
     ),
     "ask_level": ConfigVar(
         key="ask_level",
@@ -103,7 +103,7 @@ hunger_config_map = {
         prompt_on_new=True,
         type_str="int",
         validator=lambda v: validate_int(v, min_value=1),
-        default=5,
+        default=3,
     ),
     "max_order_age": ConfigVar(
         key="max_order_age",
@@ -118,5 +118,26 @@ hunger_config_map = {
         type_str="int",
         validator=lambda v: validate_int(v, min_value=0, inclusive=False),
         default=300,
+    ),
+    "volatility_interval": ConfigVar(
+        key="volatility_interval",
+        prompt="What is an interval, in second, in which to pick historical mid price data from to calculate market volatility? >>> ",
+        type_str="int",
+        validator=lambda v: validate_int(v, min_value=1, inclusive=False),
+        default=60 * 5,
+    ),
+    "avg_volatility_period": ConfigVar(
+        key="avg_volatility_period",
+        prompt="How many interval does it take to calculate average market volatility? >>> ",
+        type_str="int",
+        validator=lambda v: validate_int(v, min_value=1, inclusive=False),
+        default=10,
+    ),
+    "max_volatility": ConfigVar(
+        key="max_volatility",
+        prompt="What is the acceptable volatility to start creating new orders or budget reallocation? (Enter 0.1 to indicate 0.1%) >>> ",
+        type_str="decimal",
+        validator=lambda v: validate_decimal(v, min_value=Decimal("0")),
+        default=Decimal("0.1"),
     ),
 }

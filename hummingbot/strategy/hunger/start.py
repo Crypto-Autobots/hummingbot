@@ -13,6 +13,9 @@ def start(self):
         bid_level = c_map.get("bid_level").value
         max_order_age = c_map.get("max_order_age").value
         filled_order_delay = c_map.get("filled_order_delay").value
+        volatility_interval = c_map.get("volatility_interval").value
+        avg_volatility_period = c_map.get("avg_volatility_period").value
+        max_volatility = c_map.get("max_volatility").value
 
         self._initialize_markets([(exchange, [market])])
         base, quote = market.split("-")
@@ -30,6 +33,9 @@ def start(self):
             bid_level=bid_level,
             max_order_age=max_order_age,
             filled_order_delay=filled_order_delay,
+            volatility_interval=volatility_interval,
+            avg_volatility_period=avg_volatility_period,
+            max_volatility=max_volatility,
         )
     except Exception as exc:
         self.notify(str(exc))

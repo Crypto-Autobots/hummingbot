@@ -1,10 +1,40 @@
+########################################################
+###              Hunger strategy config              ###
+########################################################
+
 template_version: 1
 strategy: null
+
+# The exchange to run this strategy.
 exchange: null
+
+# The market, comma separated, e.g. BTC-USDT
 market: null
+
+# The size of each order in specified token amount
 order_amount: null
+
+# The limit of trading value in quote asset
 budget_allocation: 50
-bid_level: 5
-ask_level: 5
+
+# The bids level on order book
+bid_level: 3
+
+# The asks level on order book
+ask_level: 3
+
+# The maximum lifetime of your orders in seconds
 max_order_age: 600
+
+# How long, in second, to sleep after filled order (except filled orders for budget reallocation)
 filled_order_delay: 300
+
+# The interval, in second, in which to pick historical mid price data from to calculate market volatility
+# E.g 300 for 5 minutes interval
+volatility_interval: null
+
+# The number of interval to calculate average market volatility.
+avg_volatility_period: null
+
+# The acceptable volatility to start creating new orders or budget reallocation
+max_volatility: 0

@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime
 from decimal import Decimal
+from statistics import mean
 from typing import Dict, List
 
 import pandas as pd
@@ -20,6 +21,7 @@ from hummingbot.strategy.strategy_py_base import StrategyPyBase
 from hummingbot.strategy.utils import order_age
 
 DECIMAL_ZERO = Decimal("0")
+DECIMAL_NAN = Decimal("NaN")
 hws_logger = None
 
 
@@ -37,11 +39,17 @@ class HungerStrategy(StrategyPyBase):
         self._budget_allocation = None
         self._order_amount = None
         self._market_info = None
+        self._volatility_interval = None
+        self._avg_volatility_period = None
+        self._max_volatility = None
         # Global timestamp
         self._create_timestamp = 0
         self._created_timestamp = 0
         # Global states
         self._applied_budget_reallocation = False
+        self._mid_prices = []
+        self._volatility = DECIMAL_NAN
+        self._last_vol_reported = 0
 
     @classmethod
     def logger(cls) -> HummingbotLogger:
@@ -59,6 +67,9 @@ class HungerStrategy(StrategyPyBase):
         bid_level: int,
         max_order_age: int,
         filled_order_delay: int,
+        volatility_interval: int = 60 * 5,
+        avg_volatility_period: int = 10,
+        max_volatility: Decimal = DECIMAL_ZERO,
     ):
         super().__init__()
         self._market_info = market_info
@@ -68,6 +79,9 @@ class HungerStrategy(StrategyPyBase):
         self._bid_level = bid_level
         self._max_order_age = max_order_age
         self._filled_order_delay = filled_order_delay
+        self._volatility_interval = volatility_interval
+        self._avg_volatility_period = avg_volatility_period
+        self._max_volatility = max_volatility
         self.add_markets([market_info.market])
 
     @property
@@ -189,6 +203,13 @@ class HungerStrategy(StrategyPyBase):
             amount = self.trading_rule.min_notional_size
         return amount * Decimal("1.5")
 
+    @property
+    def is_within_tolerance(self) -> bool:
+        return (
+            not self._volatility.is_nan()
+            and self._volatility <= self._max_volatility / Decimal("100")
+        )
+
     # After initializing the required variables, we define the tick method.
     # The tick method is the entry point for the strategy.
     def tick(self, timestamp: float):
@@ -205,6 +226,10 @@ class HungerStrategy(StrategyPyBase):
         # Cancel orders by max age policy
         self.cancel_active_orders_by_max_order_age()
 
+        # Calculate volatility
+        self.update_mid_prices()
+        self.update_volatility()
+
         proposal = None
         if self._create_timestamp < self.current_timestamp:
             # Create base order proposals
@@ -212,7 +237,8 @@ class HungerStrategy(StrategyPyBase):
             # Cancel active orders based on proposal prices
             self.cancel_active_orders(proposal)
             # Apply budget reallocation
-            self.apply_budget_reallocation()
+            if self.is_within_tolerance:
+                self.apply_budget_reallocation()
             # Apply functions that modify orders price
             # self.apply_order_price_modifiers(proposal)
             # Apply functions that modify orders amount
@@ -235,6 +261,39 @@ class HungerStrategy(StrategyPyBase):
             amount,
             self.mid_price,
         )
+
+    def update_mid_prices(self):
+        """
+        Query asset markets for mid price
+        """
+        self._mid_prices.append(self.mid_price)
+        # To avoid memory leak, we store only the last part of the list needed for volatility calculation
+        max_len = self._volatility_interval * self._avg_volatility_period
+        self._mid_prices = self._mid_prices[-1 * max_len:]
+
+    def update_volatility(self):
+        """
+        Update volatility data from the market
+        """
+        last_index = len(self._mid_prices) - 1
+        atr = []
+        first_index = last_index - (
+            self._volatility_interval * self._avg_volatility_period
+        )
+        first_index = max(first_index, 0)
+        for i in range(last_index, first_index, self._volatility_interval * -1):
+            prices = self._mid_prices[i - self._volatility_interval + 1: i + 1]
+            if not prices:
+                break
+            atr.append((max(prices) - min(prices)) / min(prices))
+        if atr:
+            self._volatility = mean(atr)
+        if self._last_vol_reported < self.current_timestamp - self._volatility_interval:
+            if not self._volatility.is_nan():
+                self.logger().info(
+                    f"{self.trading_pair} volatility: {self._volatility:.2%}"
+                )
+            self._last_vol_reported = self.current_timestamp
 
     def create_base_proposal(self) -> Proposal:
         """

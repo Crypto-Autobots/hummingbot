@@ -268,7 +268,7 @@ class HungerStrategy(StrategyPyBase):
         ):
             # This allows selling a portion of the base asset
             self.logger().info(
-                "Exceeded budget allocation of {}".format(self._budget_allocation)
+                f"Exceeded budget allocation of {self._budget_allocation} {self.quote_asset}"
             )
             self.handle_insufficient_quote_balance_error()
         elif (
@@ -278,8 +278,8 @@ class HungerStrategy(StrategyPyBase):
             # This allows selling a portion of the base asset
             self.logger().info(
                 f"Quote asset balance is too low - {quote_balance} {self.quote_asset}\n"
-                f" Minimum require: {self.min_quote_amount} {self.quote_asset}\n"
-                f" Order amount: {self.order_amount_in_quote_asset} {self.quote_asset}"
+                f"- Minimum require: {self.min_quote_amount} {self.quote_asset}\n"
+                f"- Order amount: {self.order_amount_in_quote_asset} {self.quote_asset}"
             )
             self.handle_insufficient_quote_balance_error()
         elif (
@@ -289,15 +289,17 @@ class HungerStrategy(StrategyPyBase):
             # This allows buying a portion of the base asset
             self.logger().info(
                 f"Base asset balance is too low - {base_balance} {self.base_asset}\n"
-                f" Minimum require: {self.min_base_amount} {self.base_asset}\n"
-                f" Order amount: {self._order_amount} {self.base_asset}"
+                f"- Minimum require: {self.min_base_amount} {self.base_asset}\n"
+                f"- Order amount: {self._order_amount} {self.base_asset}"
             )
             self.handle_insufficient_base_balance_error()
         elif base_balance_in_quote_asset + quote_balance < self.min_quote_amount * 2:
             self.logger().info(
                 "Insufficient balance! Require at least:"
-                f" - {self.min_quote_amount} {self.quote_asset} for BUY side"
-                f" - {self.min_base_amount} {self.base_asset} for SELL side"
+                f"- {self.min_base_amount} {self.base_asset} for SELL side"
+                f"- Current: {base_balance} {self.base_asset}"
+                f"- {self.min_quote_amount} {self.quote_asset} for BUY side"
+                f"- Current: {quote_balance} {self.quote_asset}"
             )
 
     def handle_insufficient_base_balance_error(self):
@@ -497,9 +499,9 @@ class HungerStrategy(StrategyPyBase):
         """
         An order has been filled in the market. Argument is a OrderFilledEvent object.
         """
-        self.logger().info(order_filled_event)
         self._cancel_active_orders()
-        self.shield_up()
+        self.logger().info(order_filled_event)
+        self.shield_up(order_filled_event)
 
     def did_cancel_order(self, cancelled_event):
         """
@@ -507,7 +509,7 @@ class HungerStrategy(StrategyPyBase):
         """
         self._cancel_active_orders()
 
-    def shield_up(self):
+    def shield_up(self, message: str):
         """
         Activate shield unless budget reallocation
         """
@@ -516,8 +518,8 @@ class HungerStrategy(StrategyPyBase):
         else:
             self._create_timestamp = self.current_timestamp + self._filled_order_delay
             until = datetime.fromtimestamp(self._create_timestamp)
-            self.notify_hb_app_with_timestamp(
-                f"Shielded up until {until} {until.astimezone().tzname()}."
+            self.notify_hb_app(
+                f"{message}\nShielded up until {until} {until.astimezone().tzname()}."
             )
 
     def format_status(self):

@@ -124,14 +124,14 @@ hunger_config_map = {
         prompt="What is an interval, in second, in which to pick historical mid price data from to calculate market volatility? >>> ",
         type_str="int",
         validator=lambda v: validate_int(v, min_value=1, inclusive=False),
-        default=60 * 5,
+        default=60 * 1,
     ),
     "avg_volatility_period": ConfigVar(
         key="avg_volatility_period",
         prompt="How many interval does it take to calculate average market volatility? >>> ",
         type_str="int",
         validator=lambda v: validate_int(v, min_value=1, inclusive=False),
-        default=10,
+        default=5,
     ),
     "max_volatility": ConfigVar(
         key="max_volatility",

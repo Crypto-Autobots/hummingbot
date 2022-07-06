@@ -12,7 +12,14 @@ from hummingbot.connector.exchange_base import ExchangeBase
 from hummingbot.connector.trading_rule import TradingRule
 from hummingbot.core.data_type.limit_order import LimitOrder
 from hummingbot.core.data_type.order_book import OrderBook
-from hummingbot.core.event.events import OrderType, TradeType
+from hummingbot.core.event.events import (
+    BuyOrderCreatedEvent,
+    OrderCancelledEvent,
+    OrderFilledEvent,
+    OrderType,
+    SellOrderCreatedEvent,
+    TradeType,
+)
 from hummingbot.core.utils import map_df_to_str
 from hummingbot.logger import HummingbotLogger
 from hummingbot.strategy.market_trading_pair_tuple import MarketTradingPairTuple
@@ -67,8 +74,8 @@ class HungerStrategy(StrategyPyBase):
         bid_level: int,
         max_order_age: int,
         filled_order_delay: int,
-        volatility_interval: int = 60 * 5,
-        avg_volatility_period: int = 10,
+        volatility_interval: int = 60,
+        avg_volatility_period: int = 5,
         max_volatility: Decimal = DECIMAL_ZERO,
     ):
         super().__init__()
@@ -199,7 +206,7 @@ class HungerStrategy(StrategyPyBase):
             # For pairs of coin-coin, ex: VSP-ETH, HMT-ETH
             amount = self.trading_rule.min_order_size
         else:
-            # For paris of coin-stable, ex: AVAX-USDT
+            # For pairs of coin-stable, ex: AVAX-USDT
             amount = self.trading_rule.min_notional_size
         return amount * Decimal("1.5")
 
@@ -288,7 +295,7 @@ class HungerStrategy(StrategyPyBase):
             atr.append((max(prices) - min(prices)) / min(prices))
         if atr:
             self._volatility = mean(atr)
-        if self._last_vol_reported < self.current_timestamp - self._volatility_interval:
+        if self._last_vol_reported <= self.current_timestamp - self._volatility_interval:
             if not self._volatility.is_nan():
                 self.logger().info(
                     f"{self.trading_pair} volatility: {self._volatility:.2%}"
@@ -365,7 +372,6 @@ class HungerStrategy(StrategyPyBase):
         """
         Re-balance assets: market buy a portion of base asset
         """
-        # TODO: add volatility calculation before placing a buy order
         base_balance = self.market.get_available_balance(self.base_asset)
         quote_balance = self.market.get_available_balance(self.quote_asset)
         buy_order_id = None
@@ -542,27 +548,37 @@ class HungerStrategy(StrategyPyBase):
                     price=buy.price,
                 )
 
-    def did_create_buy_order(self, order_created_event):
+    def did_create_buy_order(self, order_created_event: BuyOrderCreatedEvent):
         """
         A buy order has been created. Argument is a BuyOrderCreatedEvent object.
         """
         self._created_timestamp = self.current_timestamp
 
-    def did_create_sell_order(self, order_created_event):
+    def did_create_sell_order(self, order_created_event: SellOrderCreatedEvent):
         """
         A sell order has been created. Argument is a SellOrderCreatedEvent object.
         """
         self._created_timestamp = self.current_timestamp
 
-    def did_fill_order(self, order_filled_event):
+    def did_fill_order(self, order_filled_event: OrderFilledEvent):
         """
         An order has been filled in the market. Argument is a OrderFilledEvent object.
         """
         self._cancel_active_orders()
-        self.logger().info(order_filled_event)
-        self.shield_up(order_filled_event)
+        fees = ", ".join(
+            [
+                f"{fee.amount} {fee.token}"
+                for fee in order_filled_event.trade_fee.flat_fees
+            ]
+        )
+        self.shield_up(
+            f"{order_filled_event.trade_type.name} order filled:\n"
+            f"- Price: {order_filled_event.price} {self.quote_asset}\n"
+            f"- Amount: {order_filled_event.amount} {self.base_asset}\n"
+            f"- Fee: {fees}"
+        )
 
-    def did_cancel_order(self, cancelled_event):
+    def did_cancel_order(self, cancelled_event: OrderCancelledEvent):
         """
         An order has been cancelled. Argument is a OrderCancelledEvent object.
         """
@@ -594,14 +610,17 @@ class HungerStrategy(StrategyPyBase):
         # Current market data
         markets_df = map_df_to_str(self.market_status_data_frame([self._market_info]))
         lines.extend(
-            ["", "  Markets:"]
+            ["", "Markets:"]
             + ["    " + line for line in markets_df.to_string(index=False).split("\n")]
         )
+
+        # Volatility
+        lines.extend(["", f"Volatility: {self._volatility:.2%}"])
 
         # Current trading balance
         wallet_df = map_df_to_str(self.wallet_balance_data_frame([self._market_info]))
         lines.extend(
-            ["", "  Balance:"]
+            ["", "Balance:"]
             + ["    " + line for line in wallet_df.to_string(index=False).split("\n")]
         )
 
@@ -609,14 +628,11 @@ class HungerStrategy(StrategyPyBase):
         if len(self.active_orders) > 0:
             orders_df = map_df_to_str(self.active_orders_data_frame)
             lines.extend(
-                ["", "  Orders:"]
-                + [
-                    "    " + line
-                    for line in orders_df.to_string(index=False).split("\n")
-                ]
+                ["", "Orders:"]
+                + ["    " + line for line in orders_df.to_string(index=False).split("\n")]
             )
         else:
-            lines.extend(["", "  No active maker orders."])
+            lines.extend(["", "No active maker orders."])
 
         warning_lines.extend(self.balance_warning([self._market_info]))
         if len(warning_lines) > 0:

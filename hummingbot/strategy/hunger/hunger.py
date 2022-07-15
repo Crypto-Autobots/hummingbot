@@ -193,12 +193,12 @@ class HungerStrategy(StrategyPyBase):
         return Decimal(str(self.bids_df["amount"].iloc[0]))
 
     @property
-    def min_base_amount(self) -> Decimal:
-        return self.min_quote_amount / self.mid_price
-
-    @property
     def trading_rule(self) -> TradingRule:
         return self.market.trading_rules[self.trading_pair]
+
+    @property
+    def min_base_amount(self) -> Decimal:
+        return self.min_quote_amount / self.mid_price
 
     @property
     def min_quote_amount(self) -> Decimal:
@@ -208,7 +208,8 @@ class HungerStrategy(StrategyPyBase):
         else:
             # For pairs of coin-stable, ex: AVAX-USDT
             amount = self.trading_rule.min_notional_size
-        return amount * Decimal("1.5")
+        # Min quote amount must not be less than $5
+        return max(amount * Decimal("1.1"), Decimal("5"))
 
     @property
     def is_within_tolerance(self) -> bool:
@@ -244,7 +245,7 @@ class HungerStrategy(StrategyPyBase):
             # Cancel active orders based on proposal prices
             self.cancel_active_orders(proposal)
             # Apply budget reallocation
-            if self.is_within_tolerance:
+            if self.is_within_tolerance and len(self.active_orders) == 0:
                 self.apply_budget_reallocation()
             # Apply functions that modify orders price
             # self.apply_order_price_modifiers(proposal)
@@ -295,7 +296,10 @@ class HungerStrategy(StrategyPyBase):
             atr.append((max(prices) - min(prices)) / min(prices))
         if atr:
             self._volatility = mean(atr)
-        if self._last_vol_reported <= self.current_timestamp - self._volatility_interval:
+        if (
+            self._last_vol_reported
+            <= self.current_timestamp - self._volatility_interval
+        ):
             if not self._volatility.is_nan():
                 self.logger().info(
                     f"{self.trading_pair} volatility: {self._volatility:.2%}"
@@ -325,10 +329,26 @@ class HungerStrategy(StrategyPyBase):
         """
         Reallocate quote & base assets to be able to create both BUY and SELL orders
         """
-        base_balance = self._market_info.base_balance
+        base_balance = self.market.get_balance(self.base_asset)
         base_balance_in_quote_asset = base_balance * self.best_bid_price
-        quote_balance = self._market_info.quote_balance
+        quote_balance = self.market.get_available_balance(self.quote_asset)
+        buy_order_id = None
+        sell_order_id = None
         if (
+            base_balance_in_quote_asset
+            <= self.order_amount_in_quote_asset - self.min_quote_amount
+        ):
+            # This allows buying a portion of the base asset
+            self.logger().info(
+                f"Base asset available balance is low {base_balance} {self.base_asset}"
+            )
+            buy_order_id = self.buy_with_specific_market(
+                market_trading_pair_tuple=self._market_info,
+                order_type=OrderType.LIMIT,
+                amount=max(self._order_amount - base_balance, self.min_base_amount),
+                price=self.best_ask_price,
+            )
+        elif (
             base_balance_in_quote_asset + self.order_amount_in_quote_asset
             >= self._budget_allocation
         ):
@@ -336,10 +356,15 @@ class HungerStrategy(StrategyPyBase):
             self.logger().info(
                 f"Exceeded budget allocation of {self._budget_allocation} {self.quote_asset}"
             )
-            self.handle_insufficient_quote_balance_error()
+            sell_order_id = self.sell_with_specific_market(
+                market_trading_pair_tuple=self._market_info,
+                order_type=OrderType.LIMIT,
+                amount=max(base_balance - self._order_amount, self.min_base_amount),
+                price=self.best_bid_price,
+            )
         elif (
-            quote_balance < self.min_quote_amount
-            and base_balance >= self.min_base_amount * 2
+            base_balance >= self.min_base_amount * 2
+            and quote_balance < self.min_quote_amount
         ):
             # This allows selling a portion of the base asset
             self.logger().info(
@@ -347,7 +372,12 @@ class HungerStrategy(StrategyPyBase):
                 f"- Minimum require: {self.min_quote_amount} {self.quote_asset}\n"
                 f"- Order amount: {self.order_amount_in_quote_asset} {self.quote_asset}"
             )
-            self.handle_insufficient_quote_balance_error()
+            sell_order_id = self.sell_with_specific_market(
+                market_trading_pair_tuple=self._market_info,
+                order_type=OrderType.LIMIT,
+                amount=self.min_base_amount,
+                price=self.best_bid_price,
+            )
         elif (
             base_balance < self.min_base_amount
             and quote_balance >= self.min_quote_amount * 2
@@ -358,7 +388,13 @@ class HungerStrategy(StrategyPyBase):
                 f"- Minimum require: {self.min_base_amount} {self.base_asset}\n"
                 f"- Order amount: {self._order_amount} {self.base_asset}"
             )
-            self.handle_insufficient_base_balance_error()
+            # If there is pretty low quote asset
+            buy_order_id = self.buy_with_specific_market(
+                market_trading_pair_tuple=self._market_info,
+                order_type=OrderType.LIMIT,
+                amount=self.min_base_amount,
+                price=self.best_ask_price,
+            )
         elif base_balance_in_quote_asset + quote_balance < self.min_quote_amount * 2:
             self.logger().info(
                 "Insufficient balance! Require at least:"
@@ -367,58 +403,8 @@ class HungerStrategy(StrategyPyBase):
                 f"- {self.min_quote_amount} {self.quote_asset} for BUY side"
                 f"- Current: {quote_balance} {self.quote_asset}"
             )
-
-    def handle_insufficient_base_balance_error(self):
-        """
-        Re-balance assets: market buy a portion of base asset
-        """
-        base_balance = self.market.get_available_balance(self.base_asset)
-        quote_balance = self.market.get_available_balance(self.quote_asset)
-        buy_order_id = None
-        if quote_balance >= self.order_amount_in_quote_asset * 2:
-            # If there is good amount of quote asset
-            # "self._order_amount - base_balance" is to prevent buy too much of base asset
-            # if there is still some base assets (but not enough to create SELL order)
-            buy_order_id = self.buy_with_specific_market(
-                market_trading_pair_tuple=self._market_info,
-                order_type=OrderType.LIMIT,
-                amount=self._order_amount - base_balance,
-                price=self.best_ask_price,
-            )
-        elif quote_balance >= self.min_quote_amount * 2:
-            # If there is pretty low of quote asset
-            buy_order_id = self.buy_with_specific_market(
-                market_trading_pair_tuple=self._market_info,
-                order_type=OrderType.LIMIT,
-                amount=self.min_base_amount,
-                price=self.best_ask_price,
-            )
-        # Update state only if buy successfully
-        if buy_order_id is not None:
-            self._applied_budget_reallocation = True
-
-    def handle_insufficient_quote_balance_error(self):
-        """
-        Re-balance assets: market sell a portion of base asset
-        """
-        base_balance = self.market.get_available_balance(self.base_asset)
-        sell_order_id = None
-        if base_balance >= self._order_amount * 2:
-            sell_order_id = self.sell_with_specific_market(
-                market_trading_pair_tuple=self._market_info,
-                order_type=OrderType.LIMIT,
-                amount=self._order_amount,
-                price=self.best_bid_price,
-            )
-        elif base_balance >= self.min_base_amount * 2:
-            sell_order_id = self.sell_with_specific_market(
-                market_trading_pair_tuple=self._market_info,
-                order_type=OrderType.LIMIT,
-                amount=self.min_base_amount,
-                price=self.best_bid_price,
-            )
-        # Update state only if sell successfully
-        if sell_order_id is not None:
+        # Update state only if buy or sell successfully
+        if buy_order_id is not None or sell_order_id is not None:
             self._applied_budget_reallocation = True
 
     def apply_order_price_modifiers(self, proposal: Proposal):
@@ -435,19 +421,22 @@ class HungerStrategy(StrategyPyBase):
         """
         base_balance = self.market.get_available_balance(self.base_asset)
         for sell in proposal.sells:
-            base_amount = sell.size
+            # Adjust sell order amount to use remaining balance
+            # TODO: remove this if you want to implement multi orders
+            sell.size = self.market.quantize_order_amount(
+                self.trading_pair, base_balance
+            )
 
             # Adjust sell order amount to use remaining balance if less than the order amount
-            if base_balance < base_amount:
-                adjusted_amount = self.market.quantize_order_amount(
-                    self.trading_pair, base_balance
-                )
-                sell.size = adjusted_amount
-                base_balance = DECIMAL_ZERO
-            elif base_balance == DECIMAL_ZERO:
-                sell.size = DECIMAL_ZERO
-            else:
-                base_balance -= base_amount
+            # if base_balance < base_amount:
+            #     sell.size = self.market.quantize_order_amount(
+            #         self.trading_pair, base_balance
+            #     )
+            #     base_balance = DECIMAL_ZERO
+            # elif base_balance == DECIMAL_ZERO:
+            #     sell.size = DECIMAL_ZERO
+            # else:
+            #     base_balance -= base_amount
 
         quote_balance = self.market.get_available_balance(self.quote_asset)
         for buy in proposal.buys:
@@ -522,9 +511,10 @@ class HungerStrategy(StrategyPyBase):
     def to_create_orders(self, proposal: Proposal):
         return (
             proposal is not None
-            and len(self.in_flight_cancels) == 0
+            # and len(self.in_flight_cancels) == 0
             and (len(self.active_buys) == 0 or len(self.active_sells) == 0)
             and (len(proposal.buys) > 0 and len(proposal.sells) > 0)
+            and self.is_within_tolerance
         )
 
     def execute_orders_proposal(self, proposal: Proposal):
@@ -629,7 +619,10 @@ class HungerStrategy(StrategyPyBase):
             orders_df = map_df_to_str(self.active_orders_data_frame)
             lines.extend(
                 ["", "Orders:"]
-                + ["    " + line for line in orders_df.to_string(index=False).split("\n")]
+                + [
+                    "    " + line
+                    for line in orders_df.to_string(index=False).split("\n")
+                ]
             )
         else:
             lines.extend(["", "No active maker orders."])

@@ -13,10 +13,12 @@ from hummingbot.connector.trading_rule import TradingRule
 from hummingbot.core.data_type.limit_order import LimitOrder
 from hummingbot.core.data_type.order_book import OrderBook
 from hummingbot.core.event.events import (
+    BuyOrderCompletedEvent,
     BuyOrderCreatedEvent,
     OrderCancelledEvent,
     OrderFilledEvent,
     OrderType,
+    SellOrderCompletedEvent,
     SellOrderCreatedEvent,
     TradeType,
 )
@@ -53,7 +55,7 @@ class HungerStrategy(StrategyPyBase):
         self._create_timestamp = 0
         self._created_timestamp = 0
         # Global states
-        self._applied_budget_reallocation = False
+        self._budget_reallocation_orders = []
         self._mid_prices = []
         self._volatility = DECIMAL_NAN
         self._last_vol_reported = 0
@@ -118,6 +120,10 @@ class HungerStrategy(StrategyPyBase):
         if self._market_info in self.market_info_to_active_orders:
             return self.market_info_to_active_orders[self._market_info]
         return []
+
+    @property
+    def has_active_orders(self) -> bool:
+        return len(self.active_orders) > 0
 
     @property
     def active_orders_data_frame(self) -> pd.DataFrame:
@@ -218,6 +224,14 @@ class HungerStrategy(StrategyPyBase):
             and self._volatility <= self._max_volatility / Decimal("100")
         )
 
+    @property
+    def is_shield_not_being_activated(self) -> bool:
+        return self._create_timestamp < self.current_timestamp
+
+    @property
+    def is_applied_budget_reallocation(self) -> bool:
+        return len(self._budget_reallocation_orders) > 0
+
     # After initializing the required variables, we define the tick method.
     # The tick method is the entry point for the strategy.
     def tick(self, timestamp: float):
@@ -239,13 +253,13 @@ class HungerStrategy(StrategyPyBase):
         self.update_volatility()
 
         proposal = None
-        if self._create_timestamp < self.current_timestamp:
+        if self.is_shield_not_being_activated:
             # Create base order proposals
             proposal = self.create_base_proposal()
             # Cancel active orders based on proposal prices
             self.cancel_active_orders(proposal)
             # Apply budget reallocation
-            if self.is_within_tolerance and len(self.active_orders) == 0:
+            if self.is_within_tolerance and self.has_active_orders is False:
                 self.apply_budget_reallocation()
             # Apply functions that modify orders price
             # self.apply_order_price_modifiers(proposal)
@@ -332,8 +346,6 @@ class HungerStrategy(StrategyPyBase):
         base_balance = self.market.get_balance(self.base_asset)
         base_balance_in_quote_asset = base_balance * self.best_bid_price
         quote_balance = self.market.get_available_balance(self.quote_asset)
-        buy_order_id = None
-        sell_order_id = None
         if (
             base_balance_in_quote_asset
             <= self.order_amount_in_quote_asset - self.min_quote_amount
@@ -342,12 +354,13 @@ class HungerStrategy(StrategyPyBase):
             self.logger().info(
                 f"Base asset available balance is low {base_balance} {self.base_asset}"
             )
-            buy_order_id = self.buy_with_specific_market(
+            order_id = self.buy_with_specific_market(
                 market_trading_pair_tuple=self._market_info,
                 order_type=OrderType.LIMIT,
                 amount=max(self._order_amount - base_balance, self.min_base_amount),
                 price=self.best_ask_price,
             )
+            self._budget_reallocation_orders.append(order_id)
         elif (
             base_balance_in_quote_asset + self.order_amount_in_quote_asset
             >= self._budget_allocation
@@ -356,12 +369,13 @@ class HungerStrategy(StrategyPyBase):
             self.logger().info(
                 f"Exceeded budget allocation of {self._budget_allocation} {self.quote_asset}"
             )
-            sell_order_id = self.sell_with_specific_market(
+            order_id = self.sell_with_specific_market(
                 market_trading_pair_tuple=self._market_info,
                 order_type=OrderType.LIMIT,
                 amount=max(base_balance - self._order_amount, self.min_base_amount),
                 price=self.best_bid_price,
             )
+            self._budget_reallocation_orders.append(order_id)
         elif (
             base_balance >= self.min_base_amount * 2
             and quote_balance < self.min_quote_amount
@@ -372,12 +386,13 @@ class HungerStrategy(StrategyPyBase):
                 f"- Minimum require: {self.min_quote_amount} {self.quote_asset}\n"
                 f"- Order amount: {self.order_amount_in_quote_asset} {self.quote_asset}"
             )
-            sell_order_id = self.sell_with_specific_market(
+            order_id = self.sell_with_specific_market(
                 market_trading_pair_tuple=self._market_info,
                 order_type=OrderType.LIMIT,
                 amount=self.min_base_amount,
                 price=self.best_bid_price,
             )
+            self._budget_reallocation_orders.append(order_id)
         elif (
             base_balance < self.min_base_amount
             and quote_balance >= self.min_quote_amount * 2
@@ -389,12 +404,13 @@ class HungerStrategy(StrategyPyBase):
                 f"- Order amount: {self._order_amount} {self.base_asset}"
             )
             # If there is pretty low quote asset
-            buy_order_id = self.buy_with_specific_market(
+            order_id = self.buy_with_specific_market(
                 market_trading_pair_tuple=self._market_info,
                 order_type=OrderType.LIMIT,
                 amount=self.min_base_amount,
                 price=self.best_ask_price,
             )
+            self._budget_reallocation_orders.append(order_id)
         elif base_balance_in_quote_asset + quote_balance < self.min_quote_amount * 2:
             self.logger().info(
                 "Insufficient balance! Require at least:"
@@ -403,9 +419,9 @@ class HungerStrategy(StrategyPyBase):
                 f"- {self.min_quote_amount} {self.quote_asset} for BUY side"
                 f"- Current: {quote_balance} {self.quote_asset}"
             )
-        # Update state only if buy or sell successfully
-        if buy_order_id is not None or sell_order_id is not None:
-            self._applied_budget_reallocation = True
+        else:
+            # Clear all budget reallocation orders if there is no need to reallocate
+            self._budget_reallocation_orders = []
 
     def apply_order_price_modifiers(self, proposal: Proposal):
         # TODO: implement price modifiers
@@ -472,17 +488,21 @@ class HungerStrategy(StrategyPyBase):
         self.logger().debug(f"Applied budget constraint to proposal: {proposal}")
 
     def _cancel_active_orders(self):
-        self._created_timestamp = 0
-        for order in self.active_orders:
-            if order.client_order_id not in self.in_flight_cancels.keys():
-                self.cancel_order(self._market_info, order.client_order_id)
+        """
+        Cancel all active orders if any
+        """
+        if self.has_active_orders:
+            self._created_timestamp = 0  # reset created timestamp
+            for order in self.active_orders:
+                if order.client_order_id not in self.in_flight_cancels.keys():
+                    self.cancel_order(self._market_info, order.client_order_id)
 
     def cancel_active_orders_by_max_order_age(self):
         """
         Cancel active orders if they are older than max age limit
         """
         if (
-            self.active_orders
+            self.has_active_orders
             and self._created_timestamp != 0
             and self.current_timestamp - self._created_timestamp > self._max_order_age
         ):
@@ -508,18 +528,24 @@ class HungerStrategy(StrategyPyBase):
             ):
                 self._cancel_active_orders()
 
-    def to_create_orders(self, proposal: Proposal):
+    def to_create_orders(self, proposal: Proposal) -> bool:
+        """
+        Check all the criteria to create orders
+        """
         return (
             proposal is not None
-            # and len(self.in_flight_cancels) == 0
             and (len(self.active_buys) == 0 or len(self.active_sells) == 0)
             and (len(proposal.buys) > 0 and len(proposal.sells) > 0)
+            and self.is_applied_budget_reallocation is False
             and self.is_within_tolerance
         )
 
     def execute_orders_proposal(self, proposal: Proposal):
+        """
+        Convert proposal to orders and execute them
+        """
         sell_order_id = None
-
+        buy_order_id = None
         if len(proposal.sells) > 0:
             for sell in proposal.sells:
                 sell_order_id = self.sell_with_specific_market(
@@ -528,15 +554,17 @@ class HungerStrategy(StrategyPyBase):
                     amount=sell.size,
                     price=sell.price,
                 )
-
         if sell_order_id is not None and len(proposal.buys) > 0:
             for buy in proposal.buys:
-                self.buy_with_specific_market(
+                buy_order_id = self.buy_with_specific_market(
                     market_trading_pair_tuple=self._market_info,
                     order_type=OrderType.LIMIT,
                     amount=buy.size,
                     price=buy.price,
                 )
+        if buy_order_id is not None:
+            # If everything is fine, we can clear the budget_reallocation_orders
+            self._budget_reallocation_orders = []
 
     def did_create_buy_order(self, order_created_event: BuyOrderCreatedEvent):
         """
@@ -554,19 +582,44 @@ class HungerStrategy(StrategyPyBase):
         """
         An order has been filled in the market. Argument is a OrderFilledEvent object.
         """
-        self._cancel_active_orders()
-        fees = ", ".join(
-            [
-                f"{fee.amount} {fee.token}"
-                for fee in order_filled_event.trade_fee.flat_fees
-            ]
-        )
-        self.shield_up(
-            f"{order_filled_event.trade_type.name} order filled:\n"
-            f"- Price: {order_filled_event.price} {self.quote_asset}\n"
-            f"- Amount: {order_filled_event.amount} {self.base_asset}\n"
-            f"- Fee: {fees}"
-        )
+        if order_filled_event.order_id not in self._budget_reallocation_orders:
+            fees = ", ".join(
+                [
+                    f"{fee.amount} {fee.token}"
+                    for fee in order_filled_event.trade_fee.flat_fees
+                ]
+            )
+            self.shield_up(
+                f"{order_filled_event.trade_type.name} order filled\n"
+                f"- Price: {order_filled_event.price} {self.quote_asset}\n"
+                f"- Amount: {order_filled_event.amount} {self.base_asset}\n"
+                f"- Fee: {fees}"
+            )
+            self._cancel_active_orders()
+
+    def did_complete_buy_order(self, order_complete_event: BuyOrderCompletedEvent):
+        """
+        A buy order has been completed.
+        """
+        if order_complete_event.order_id not in self._budget_reallocation_orders:
+            self.shield_up(
+                f"BUY order completed\n"
+                f"- {order_complete_event.base_asset_amount} {order_complete_event.base_asset}\n"
+                f"- {order_complete_event.quote_asset_amount} {order_complete_event.quote_asset}"
+            )
+            self._cancel_active_orders()
+
+    def did_complete_sell_order(self, order_complete_event: SellOrderCompletedEvent):
+        """
+        A sell order has been completed.
+        """
+        if order_complete_event.order_id not in self._budget_reallocation_orders:
+            self.shield_up(
+                f"SELL order completed\n"
+                f"- {order_complete_event.base_asset_amount} {order_complete_event.base_asset}\n"
+                f"- {order_complete_event.quote_asset_amount} {order_complete_event.quote_asset}"
+            )
+            self._cancel_active_orders()
 
     def did_cancel_order(self, cancelled_event: OrderCancelledEvent):
         """
@@ -578,18 +631,24 @@ class HungerStrategy(StrategyPyBase):
         """
         Activate shield unless budget reallocation
         """
-        if self._applied_budget_reallocation:
-            self._applied_budget_reallocation = False
-        else:
+        if (
+            self.is_applied_budget_reallocation is False
+            and self.is_shield_not_being_activated
+        ):
             self._create_timestamp = self.current_timestamp + self._filled_order_delay
             until = datetime.fromtimestamp(self._create_timestamp)
-            self.notify_hb_app(
-                f"{message}\nShielded up until {until} {until.astimezone().tzname()}."
+            message = (
+                f"{message}\n"
+                f"Shielded up until {until} {until.astimezone().tzname()}."
             )
+            self.logger().info(message.replace("\n", ". "))
+            self.notify_hb_app(message)
+        elif self.is_applied_budget_reallocation is True:
+            self.logger().info("Budget reallocation applied, not activating shield.")
 
     def format_status(self):
         """
-        Return the budget, market, miner and order statuses.
+        Return the budget, market, miner and order states.
         """
         if not self._exchange_ready:
             return "Market connectors are not ready."
@@ -615,7 +674,7 @@ class HungerStrategy(StrategyPyBase):
         )
 
         # Current active orders
-        if len(self.active_orders) > 0:
+        if self.has_active_orders:
             orders_df = map_df_to_str(self.active_orders_data_frame)
             lines.extend(
                 ["", "Orders:"]

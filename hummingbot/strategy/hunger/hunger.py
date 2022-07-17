@@ -653,7 +653,7 @@ class HungerStrategy(StrategyPyBase):
                 f"{message}\n"
                 f"Shielded up until {until} {until.astimezone().tzname()}."
             )
-            self.logger().info(message.replace("\n", ". "))
+            self.logger().info(message.replace("\n-", ".").replace("\n", ". "))
             self.notify_hb_app(message)
 
     def format_status(self):

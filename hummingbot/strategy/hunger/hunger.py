@@ -595,6 +595,8 @@ class HungerStrategy(StrategyPyBase):
                 f"- Amount: {order_filled_event.amount} {self.base_asset}\n"
                 f"- Fee: {fees}"
             )
+        else:
+            self.logger().info("Budget reallocation applied, not activating shield.")
         # Cancel all orders even if they are in the budget_reallocation_orders
         # - prevent partially unfilled orders if applying budget reallocation
         # - prevent filling more asset if not in budget reallocation phase
@@ -610,6 +612,8 @@ class HungerStrategy(StrategyPyBase):
                 f"- {order_complete_event.base_asset_amount} {order_complete_event.base_asset}\n"
                 f"- {order_complete_event.quote_asset_amount} {order_complete_event.quote_asset}"
             )
+        else:
+            self.logger().info("Budget reallocation applied, not activating shield.")
         # Cancel all orders
         self._cancel_active_orders()
 
@@ -623,6 +627,8 @@ class HungerStrategy(StrategyPyBase):
                 f"- {order_complete_event.base_asset_amount} {order_complete_event.base_asset}\n"
                 f"- {order_complete_event.quote_asset_amount} {order_complete_event.quote_asset}"
             )
+        else:
+            self.logger().info("Budget reallocation applied, not activating shield.")
         # Cancel all orders
         self._cancel_active_orders()
 
@@ -649,8 +655,6 @@ class HungerStrategy(StrategyPyBase):
             )
             self.logger().info(message.replace("\n", ". "))
             self.notify_hb_app(message)
-        elif self.is_applied_budget_reallocation is True:
-            self.logger().info("Budget reallocation applied, not activating shield.")
 
     def format_status(self):
         """

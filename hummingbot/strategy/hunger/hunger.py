@@ -595,7 +595,10 @@ class HungerStrategy(StrategyPyBase):
                 f"- Amount: {order_filled_event.amount} {self.base_asset}\n"
                 f"- Fee: {fees}"
             )
-            self._cancel_active_orders()
+        # Cancel all orders even if they are in the budget_reallocation_orders
+        # - prevent partially unfilled orders if applying budget reallocation
+        # - prevent filling more asset if not in budget reallocation phase
+        self._cancel_active_orders()
 
     def did_complete_buy_order(self, order_complete_event: BuyOrderCompletedEvent):
         """
@@ -607,7 +610,8 @@ class HungerStrategy(StrategyPyBase):
                 f"- {order_complete_event.base_asset_amount} {order_complete_event.base_asset}\n"
                 f"- {order_complete_event.quote_asset_amount} {order_complete_event.quote_asset}"
             )
-            self._cancel_active_orders()
+        # Cancel all orders
+        self._cancel_active_orders()
 
     def did_complete_sell_order(self, order_complete_event: SellOrderCompletedEvent):
         """
@@ -619,12 +623,14 @@ class HungerStrategy(StrategyPyBase):
                 f"- {order_complete_event.base_asset_amount} {order_complete_event.base_asset}\n"
                 f"- {order_complete_event.quote_asset_amount} {order_complete_event.quote_asset}"
             )
-            self._cancel_active_orders()
+        # Cancel all orders
+        self._cancel_active_orders()
 
     def did_cancel_order(self, cancelled_event: OrderCancelledEvent):
         """
         An order has been cancelled. Argument is a OrderCancelledEvent object.
         """
+        # Cancel all orders if there is some manually cancelled order
         self._cancel_active_orders()
 
     def shield_up(self, message: str):

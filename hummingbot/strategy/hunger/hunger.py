@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 from statistics import mean
-from typing import Dict, List
+from typing import Dict, List, Union
 
 import pandas as pd
 
@@ -491,11 +491,10 @@ class HungerStrategy(StrategyPyBase):
         """
         Cancel all active orders if any
         """
-        if self.has_active_orders:
-            self._created_timestamp = 0  # reset created timestamp
-            for order in self.active_orders:
-                if order.client_order_id not in self.in_flight_cancels.keys():
-                    self.cancel_order(self._market_info, order.client_order_id)
+        self._created_timestamp = 0  # reset created timestamp
+        for order in self.active_orders:
+            if order.client_order_id not in self.in_flight_cancels.keys():
+                self.cancel_order(self._market_info, order.client_order_id)
 
     def cancel_active_orders_by_max_order_age(self):
         """
@@ -582,21 +581,23 @@ class HungerStrategy(StrategyPyBase):
         """
         An order has been filled in the market. Argument is a OrderFilledEvent object.
         """
+        fees = ", ".join(
+            [
+                f"{fee.amount} {fee.token}"
+                for fee in order_filled_event.trade_fee.flat_fees
+            ]
+        )
+        messages = [
+            f"{order_filled_event.trade_type.name} order filled",
+            f"Price: {order_filled_event.price} {self.quote_asset}",
+            f"Amount: {order_filled_event.amount} {self.base_asset}",
+            f"Fee: {fees}",
+        ]
         if order_filled_event.order_id not in self._budget_reallocation_orders:
-            fees = ", ".join(
-                [
-                    f"{fee.amount} {fee.token}"
-                    for fee in order_filled_event.trade_fee.flat_fees
-                ]
-            )
-            self.shield_up(
-                f"{order_filled_event.trade_type.name} order filled\n"
-                f"- Price: {order_filled_event.price} {self.quote_asset}\n"
-                f"- Amount: {order_filled_event.amount} {self.base_asset}\n"
-                f"- Fee: {fees}"
-            )
+            self.shield_up()
         else:
-            self.logger().info("Budget reallocation applied, not activating shield.")
+            messages.append("Budget reallocation applied, not activating shield.")
+        self.notify(messages)
         # Cancel all orders even if they are in the budget_reallocation_orders
         # - prevent partially unfilled orders if applying budget reallocation
         # - prevent filling more asset if not in budget reallocation phase
@@ -606,30 +607,32 @@ class HungerStrategy(StrategyPyBase):
         """
         A buy order has been completed.
         """
+        messages = [
+            "BUY order completed",
+            f"{order_complete_event.base_asset_amount} {order_complete_event.base_asset} "
+            f"({order_complete_event.quote_asset_amount} {order_complete_event.quote_asset})",
+        ]
         if order_complete_event.order_id not in self._budget_reallocation_orders:
-            self.shield_up(
-                f"BUY order completed\n"
-                f"- {order_complete_event.base_asset_amount} {order_complete_event.base_asset}\n"
-                f"- {order_complete_event.quote_asset_amount} {order_complete_event.quote_asset}"
-            )
+            self.shield_up()
         else:
-            self.logger().info("Budget reallocation applied, not activating shield.")
-        # Cancel all orders
+            messages.append("Budget reallocation applied, not activating shield.")
+        self.notify(messages)
         self._cancel_active_orders()
 
     def did_complete_sell_order(self, order_complete_event: SellOrderCompletedEvent):
         """
         A sell order has been completed.
         """
+        messages = [
+            "SELL order completed",
+            f"{order_complete_event.base_asset_amount} {order_complete_event.base_asset} "
+            f"({order_complete_event.quote_asset_amount} {order_complete_event.quote_asset})",
+        ]
         if order_complete_event.order_id not in self._budget_reallocation_orders:
-            self.shield_up(
-                f"SELL order completed\n"
-                f"- {order_complete_event.base_asset_amount} {order_complete_event.base_asset}\n"
-                f"- {order_complete_event.quote_asset_amount} {order_complete_event.quote_asset}"
-            )
+            self.shield_up()
         else:
-            self.logger().info("Budget reallocation applied, not activating shield.")
-        # Cancel all orders
+            messages.append("Budget reallocation applied, not activating shield.")
+        self.notify(messages)
         self._cancel_active_orders()
 
     def did_cancel_order(self, cancelled_event: OrderCancelledEvent):
@@ -639,7 +642,7 @@ class HungerStrategy(StrategyPyBase):
         # Cancel all orders if there is some manually cancelled order
         self._cancel_active_orders()
 
-    def shield_up(self, message: str):
+    def shield_up(self):
         """
         Activate shield unless budget reallocation
         """
@@ -649,12 +652,16 @@ class HungerStrategy(StrategyPyBase):
         ):
             self._create_timestamp = self.current_timestamp + self._filled_order_delay
             until = datetime.fromtimestamp(self._create_timestamp)
-            message = (
-                f"{message}\n"
-                f"Shielded up until {until} {until.astimezone().tzname()}."
-            )
-            self.logger().info(message.replace("\n-", ".").replace("\n", ". "))
-            self.notify_hb_app(message)
+            self.notify(f"Shielded up until {until} {until.astimezone().tzname()}.")
+
+    def notify(self, messages: Union[list, str], separator: str = ". "):
+        """
+        Notify the user via both logger and hb app
+        """
+        if type(messages) is list:
+            messages = separator.join(messages)
+        self.logger().info(messages)
+        self.notify_hb_app(messages)
 
     def format_status(self):
         """
@@ -675,6 +682,10 @@ class HungerStrategy(StrategyPyBase):
 
         # Volatility
         lines.extend(["", f"Volatility: {self._volatility:.2%}"])
+        lines.extend(["    ", f"Volatility shield: {not self.is_within_tolerance}"])
+        lines.extend(
+            ["    ", f"Timing shield: {not self.is_shield_not_being_activated}"]
+        )
 
         # Current trading balance
         wallet_df = map_df_to_str(self.wallet_balance_data_frame([self._market_info]))

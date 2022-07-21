@@ -229,6 +229,19 @@ class HungerStrategy(StrategyPyBase):
         return self._create_timestamp < self.current_timestamp
 
     @property
+    def shields(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                ["Time", not self.is_shield_not_being_activated],
+                ["Volatility", not self.is_within_tolerance],
+            ],
+            columns=[
+                "Shield",
+                "Status",
+            ],
+        )
+
+    @property
     def is_applied_budget_reallocation(self) -> bool:
         return len(self._budget_reallocation_orders) > 0
 
@@ -291,7 +304,7 @@ class HungerStrategy(StrategyPyBase):
         self._mid_prices.append(self.mid_price)
         # To avoid memory leak, we store only the last part of the list needed for volatility calculation
         max_len = self._volatility_interval * self._avg_volatility_period
-        self._mid_prices = self._mid_prices[-1 * max_len]
+        self._mid_prices = self._mid_prices[-1 * max_len:]
 
     def update_volatility(self):
         """
@@ -691,10 +704,10 @@ class HungerStrategy(StrategyPyBase):
         )
 
         # Volatility
+        shields_df = map_df_to_str(self.shields)
         lines.extend(
             ["", f"Volatility: {self._volatility:.2%}"]
-            + ["    ", f"Timing shield: {not self.is_shield_not_being_activated}\n"]
-            + ["    ", f"Volatility shield: {not self.is_within_tolerance}"]
+            + ["    " + line for line in shields_df.to_string(index=False).split("\n")]
         )
 
         # Current trading balance

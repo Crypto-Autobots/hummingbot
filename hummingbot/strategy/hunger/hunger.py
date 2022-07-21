@@ -291,7 +291,7 @@ class HungerStrategy(StrategyPyBase):
         self._mid_prices.append(self.mid_price)
         # To avoid memory leak, we store only the last part of the list needed for volatility calculation
         max_len = self._volatility_interval * self._avg_volatility_period
-        self._mid_prices = self._mid_prices[-1 * max_len:]
+        self._mid_prices = self._mid_prices[-1 * max_len]
 
     def update_volatility(self):
         """
@@ -354,10 +354,14 @@ class HungerStrategy(StrategyPyBase):
             self.logger().info(
                 f"Base asset available balance is low {base_balance} {self.base_asset}"
             )
+            amount = max(
+                min(self._order_amount - base_balance, self.best_ask_amount),
+                self.min_base_amount,
+            )
             order_id = self.buy_with_specific_market(
                 market_trading_pair_tuple=self._market_info,
                 order_type=OrderType.LIMIT,
-                amount=max(self._order_amount - base_balance, self.min_base_amount),
+                amount=amount,
                 price=self.best_ask_price,
             )
             self._budget_reallocation_orders.append(order_id)
@@ -369,10 +373,14 @@ class HungerStrategy(StrategyPyBase):
             self.logger().info(
                 f"Exceeded budget allocation of {self._budget_allocation} {self.quote_asset}"
             )
+            amount = max(
+                min(base_balance - self._order_amount, self.best_bid_amount),
+                self.min_base_amount,
+            )
             order_id = self.sell_with_specific_market(
                 market_trading_pair_tuple=self._market_info,
                 order_type=OrderType.LIMIT,
-                amount=max(base_balance - self._order_amount, self.min_base_amount),
+                amount=amount,
                 price=self.best_bid_price,
             )
             self._budget_reallocation_orders.append(order_id)
@@ -381,11 +389,12 @@ class HungerStrategy(StrategyPyBase):
             and quote_balance < self.min_quote_amount
         ):
             # This allows selling a portion of the base asset
-            self.logger().info(
-                f"Quote asset balance is too low - {quote_balance} {self.quote_asset}\n"
-                f"- Minimum require: {self.min_quote_amount} {self.quote_asset}\n"
-                f"- Order amount: {self.order_amount_in_quote_asset} {self.quote_asset}"
-            )
+            messages = [
+                f"Quote asset balance is too low - {quote_balance} {self.quote_asset}",
+                f"Minimum require: {self.min_quote_amount} {self.quote_asset}",
+                f"Order amount: {self.order_amount_in_quote_asset} {self.quote_asset}",
+            ]
+            self.logger().info(". ".join(messages))
             order_id = self.sell_with_specific_market(
                 market_trading_pair_tuple=self._market_info,
                 order_type=OrderType.LIMIT,
@@ -398,11 +407,12 @@ class HungerStrategy(StrategyPyBase):
             and quote_balance >= self.min_quote_amount * 2
         ):
             # This allows buying a portion of the base asset
-            self.logger().info(
-                f"Base asset balance is too low - {base_balance} {self.base_asset}\n"
-                f"- Minimum require: {self.min_base_amount} {self.base_asset}\n"
-                f"- Order amount: {self._order_amount} {self.base_asset}"
-            )
+            messages = [
+                f"Base asset balance is too low - {base_balance} {self.base_asset}",
+                f"Minimum require: {self.min_base_amount} {self.base_asset}",
+                f"Order amount: {self._order_amount} {self.base_asset}",
+            ]
+            self.logger().info(". ".join(messages))
             # If there is pretty low quote asset
             order_id = self.buy_with_specific_market(
                 market_trading_pair_tuple=self._market_info,
@@ -412,7 +422,7 @@ class HungerStrategy(StrategyPyBase):
             )
             self._budget_reallocation_orders.append(order_id)
         elif base_balance_in_quote_asset + quote_balance < self.min_quote_amount * 2:
-            self.logger().info(
+            self.logger().error(
                 "Insufficient balance! Require at least:"
                 f"- {self.min_base_amount} {self.base_asset} for SELL side"
                 f"- Current: {base_balance} {self.base_asset}"
@@ -681,10 +691,10 @@ class HungerStrategy(StrategyPyBase):
         )
 
         # Volatility
-        lines.extend(["", f"Volatility: {self._volatility:.2%}"])
-        lines.extend(["    ", f"Volatility shield: {not self.is_within_tolerance}"])
         lines.extend(
-            ["    ", f"Timing shield: {not self.is_shield_not_being_activated}"]
+            ["", f"Volatility: {self._volatility:.2%}"]
+            + ["    ", f"Timing shield: {not self.is_shield_not_being_activated}\n"]
+            + ["    ", f"Volatility shield: {not self.is_within_tolerance}"]
         )
 
         # Current trading balance

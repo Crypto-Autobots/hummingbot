@@ -556,6 +556,7 @@ class HungerStrategy(StrategyPyBase):
         """
         return (
             proposal is not None
+            and len(self.in_flight_cancels) == 0
             and (len(self.active_buys) == 0 or len(self.active_sells) == 0)
             and (len(proposal.buys) > 0 and len(proposal.sells) > 0)
             and self.is_applied_budget_reallocation is False

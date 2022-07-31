@@ -12,7 +12,7 @@ exchange: null
 market: null
 
 # The size of each order in specified token amount
-order_amount: null
+order_amount: 20
 
 # The limit of trading value in quote asset
 budget_allocation: 50

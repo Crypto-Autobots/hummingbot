@@ -173,10 +173,13 @@ class HungerStrategy(StrategyPyBase):
         return self.order_book.snapshot[0]
 
     @property
+    def order_amount_in_base_asset(self) -> Decimal:
+        return self._order_amount / self.mid_price
+
+    @property
     def order_amount_in_quote_asset(self):
-        notional_amount = self._order_amount * self.mid_price
-        buy_fee = self.get_fee(notional_amount)
-        return notional_amount * (Decimal("1") + buy_fee.percent)
+        fee = self.get_fee(self._order_amount)
+        return self._order_amount * (Decimal("1") + fee.percent)
 
     @property
     def best_ask_price(self) -> Decimal:
@@ -256,10 +259,11 @@ class HungerStrategy(StrategyPyBase):
                 )
                 return
             else:
-                self.logger().warning(f"{self.market.name} is ready. Trading started")
+                self.logger().warning(f"{self.market.name} is ready. Trading started.")
 
         # Cancel orders by max age policy
         self.cancel_active_orders_by_max_order_age()
+        self.cancel_stale_budget_reallocation_orders()
 
         # Calculate volatility
         self.update_mid_prices()
@@ -342,11 +346,11 @@ class HungerStrategy(StrategyPyBase):
 
         # bid_price proposal
         bid_price = Decimal(str(self.bids_df["price"].iloc[self._bid_level - 1]))
-        buys.append(PriceSize(bid_price, self._order_amount))
+        buys.append(PriceSize(bid_price, self.order_amount_in_base_asset))
 
         # ask_price proposal
         ask_price = Decimal(str(self.asks_df["price"].iloc[self._ask_level - 1]))
-        sells.append(PriceSize(ask_price, self._order_amount))
+        sells.append(PriceSize(ask_price, self.order_amount_in_base_asset))
 
         base_proposal = Proposal(buys, sells)
         self.logger().debug(f"Created base proposal: {base_proposal}")
@@ -365,10 +369,10 @@ class HungerStrategy(StrategyPyBase):
         ):
             # This allows buying a portion of the base asset
             self.logger().info(
-                f"Base asset available balance is low {base_balance} {self.base_asset}"
+                f"Base asset available balance is low {base_balance} {self.base_asset}."
             )
             amount = max(
-                min(self._order_amount - base_balance, self.best_ask_amount),
+                min(self.order_amount_in_base_asset - base_balance, self.best_ask_amount),
                 self.min_base_amount,
             )
             order_id = self.buy_with_specific_market(
@@ -384,10 +388,10 @@ class HungerStrategy(StrategyPyBase):
         ):
             # This allows selling a portion of the base asset
             self.logger().info(
-                f"Exceeded budget allocation of {self._budget_allocation} {self.quote_asset}"
+                f"Exceeded budget allocation of {self._budget_allocation} {self.quote_asset}."
             )
             amount = max(
-                min(base_balance - self._order_amount, self.best_bid_amount),
+                min(base_balance - self.order_amount_in_base_asset, self.best_bid_amount),
                 self.min_base_amount,
             )
             order_id = self.sell_with_specific_market(
@@ -423,7 +427,7 @@ class HungerStrategy(StrategyPyBase):
             messages = [
                 f"Base asset balance is too low - {base_balance} {self.base_asset}",
                 f"Minimum require: {self.min_base_amount} {self.base_asset}",
-                f"Order amount: {self._order_amount} {self.base_asset}",
+                f"Order amount: {self.order_amount_in_base_asset} {self.base_asset}",
             ]
             self.logger().info(". ".join(messages))
             # If there is pretty low quote asset
@@ -529,7 +533,20 @@ class HungerStrategy(StrategyPyBase):
             and self.current_timestamp - self._created_timestamp > self._max_order_age
         ):
             self._cancel_active_orders()
-            self.logger().info("Cancelled active orders due to max_order_age")
+            self.logger().info("Cancelled active orders due to max_order_age.")
+
+    def cancel_stale_budget_reallocation_orders(self):
+        """
+        Cancel budget reallocation order if it is stale (older than 5 seconds)
+        """
+        if (
+            self.is_applied_budget_reallocation is True
+            and self.has_active_orders
+            and self._created_timestamp != 0
+            and self.current_timestamp - self._created_timestamp > 5
+        ):
+            self._cancel_active_orders()
+            self.logger().info("Cancelled stale budget reallocation order(s).")
 
     def cancel_active_orders(self, proposal: Proposal):
         """

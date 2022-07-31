@@ -37,14 +37,14 @@ def market_prompt() -> str:
 
 
 def order_amount_prompt() -> str:
-    base_asset, _ = hunger_config_map.get("market").value.split("-")
-    return f"What is the amount of {base_asset} per order? >>> "
+    base_asset, quote_asset = hunger_config_map.get("market").value.split("-")
+    return f"What is the amount of {base_asset} (in {quote_asset}) per order? >>> "
 
 
 def budget_allocation_prompt() -> str:
     trading_pair = hunger_config_map.get("market").value
     _, quote_asset = trading_pair.split("-")
-    return f"What is the budget allocation for {trading_pair} in {quote_asset}? >>> "
+    return f"What is the budget allocation for {trading_pair} (in {quote_asset})? >>> "
 
 
 # List of parameters defined by the strategy

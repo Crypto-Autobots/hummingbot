@@ -131,14 +131,21 @@ class HungerStrategy(StrategyPyBase):
         active_orders.sort(key=lambda x: x.price, reverse=True)
         data = []
         for order in active_orders:
+            # Calculate actual spread
             spread = abs(order.price - self.mid_price) / self.mid_price
-            age = pd.Timestamp(
-                order_age(order, self.current_timestamp), unit="s"
-            ).strftime("%H:%M:%S")
+            # Calculate current order age
+            age = pd.Timestamp(order_age(order, self.current_timestamp), unit="s").strftime("%H:%M:%S")
+            # Find actual order levels on orderbook
+            if order.is_buy:
+                level = self.bids_df["price"].index[self.bids_df["price"] <= order.price].to_list()[0] + 1
+                side = "buy"
+            else:
+                level = self.asks_df["price"].index[self.asks_df["price"] >= order.price].to_list()[0] + 1
+                side = "sell"
             data.append(
                 [
-                    self._bid_level,
-                    "buy" if order.is_buy else "sell",
+                    level,
+                    side,
                     float(order.price),
                     f"{spread:.2%}",
                     float(order.quantity),
@@ -372,7 +379,9 @@ class HungerStrategy(StrategyPyBase):
                 f"Base asset available balance is low {base_balance} {self.base_asset}."
             )
             amount = max(
-                min(self.order_amount_in_base_asset - base_balance, self.best_ask_amount),
+                min(
+                    self.order_amount_in_base_asset - base_balance, self.best_ask_amount
+                ),
                 self.min_base_amount,
             )
             order_id = self.buy_with_specific_market(
@@ -391,7 +400,9 @@ class HungerStrategy(StrategyPyBase):
                 f"Exceeded budget allocation of {self._budget_allocation} {self.quote_asset}."
             )
             amount = max(
-                min(base_balance - self.order_amount_in_base_asset, self.best_bid_amount),
+                min(
+                    base_balance - self.order_amount_in_base_asset, self.best_bid_amount
+                ),
                 self.min_base_amount,
             )
             order_id = self.sell_with_specific_market(

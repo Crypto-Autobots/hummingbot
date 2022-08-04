@@ -258,42 +258,44 @@ class HungerStrategy(StrategyPyBase):
     # After initializing the required variables, we define the tick method.
     # The tick method is the entry point for the strategy.
     def tick(self, timestamp: float):
-        if not self._exchange_ready:
-            self._exchange_ready = self.market.ready
+        try:
             if not self._exchange_ready:
-                self.logger().warning(
-                    f"{self.market.name} is not ready. Please wait..."
-                )
-                return
-            else:
-                self.logger().warning(f"{self.market.name} is ready. Trading started.")
+                self._exchange_ready = self.market.ready
+                if not self._exchange_ready:
+                    self.logger().warning(
+                        f"{self.market.name} is not ready. Please wait..."
+                    )
+                    return
+                else:
+                    self.logger().warning(f"{self.market.name} is ready. Trading started.")
 
-        # Cancel orders by max age policy
-        self.cancel_active_orders_by_max_order_age()
-        self.cancel_stale_budget_reallocation_orders()
+            # Cancel orders by max age policy
+            self.cancel_active_orders_by_max_order_age()
 
-        # Calculate volatility
-        self.update_mid_prices()
-        self.update_volatility()
+            # Calculate volatility
+            self.update_mid_prices()
+            self.update_volatility()
 
-        proposal = None
-        if self.is_shield_not_being_activated:
-            # Create base order proposals
-            proposal = self.create_base_proposal()
-            # Cancel active orders based on proposal prices
-            self.cancel_active_orders(proposal)
-            # Apply budget reallocation
-            if self.is_within_tolerance and self.has_active_orders is False:
-                self.apply_budget_reallocation()
-            # Apply functions that modify orders price
-            # self.apply_order_price_modifiers(proposal)
-            # Apply functions that modify orders amount
-            # self.apply_order_amount_modifiers(proposal)
-            # Apply budget constraint, i.e. can't buy/sell more than what you have.
-            self.apply_budget_constraint(proposal)
+            proposal = None
+            if self.is_shield_not_being_activated:
+                # Create base order proposals
+                proposal = self.create_base_proposal()
+                # Cancel active orders based on proposal prices
+                self.cancel_active_orders(proposal)
+                # Apply budget reallocation
+                if self.is_within_tolerance and self.has_active_orders is False:
+                    self.apply_budget_reallocation()
+                # Apply functions that modify orders price
+                # self.apply_order_price_modifiers(proposal)
+                # Apply functions that modify orders amount
+                # self.apply_order_amount_modifiers(proposal)
+                # Apply budget constraint, i.e. can't buy/sell more than what you have.
+                self.apply_budget_constraint(proposal)
 
-        if self.to_create_orders(proposal):
-            self.execute_orders_proposal(proposal)
+            if self.to_create_orders(proposal):
+                self.execute_orders_proposal(proposal)
+        except Exception as exc:
+            self.logger().error(f"Unhandled exception in tick function: {exc}")
 
     def get_fee(self, amount: Decimal):
         """
@@ -545,19 +547,6 @@ class HungerStrategy(StrategyPyBase):
         ):
             self._cancel_active_orders()
             self.logger().info("Cancelled active orders due to max_order_age.")
-
-    def cancel_stale_budget_reallocation_orders(self):
-        """
-        Cancel budget reallocation order if it is stale (older than 5 seconds)
-        """
-        if (
-            self.is_applied_budget_reallocation is True
-            and self.has_active_orders
-            and self._created_timestamp != 0
-            and self.current_timestamp - self._created_timestamp > 5
-        ):
-            self._cancel_active_orders()
-            self.logger().info("Cancelled stale budget reallocation order(s).")
 
     def cancel_active_orders(self, proposal: Proposal):
         """

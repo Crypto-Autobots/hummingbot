@@ -2,6 +2,7 @@ from decimal import Decimal
 from typing import Optional
 
 from hummingbot.client.config.config_validators import (
+    validate_bool,
     validate_decimal,
     validate_exchange,
     validate_int,
@@ -104,6 +105,13 @@ hunger_config_map = {
         type_str="int",
         validator=lambda v: validate_int(v, min_value=1),
         default=3,
+    ),
+    "realtime_levels_enabled": ConfigVar(
+        key="realtime_levels_enabled",
+        prompt="Would you like to update order levels in realtime (this might causes consecutive order cancels)? (Yes/No) >>> ",
+        type_str="bool",
+        default=False,
+        validator=validate_bool,
     ),
     "max_order_age": ConfigVar(
         key="max_order_age",

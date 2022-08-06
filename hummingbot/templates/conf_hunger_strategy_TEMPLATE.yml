@@ -23,6 +23,9 @@ bid_level: 3
 # The asks level on order book
 ask_level: 3
 
+# Bid/Ask levels will be updated in realtime
+realtime_levels_enabled: false
+
 # The maximum lifetime of your orders in seconds
 max_order_age: 600
 

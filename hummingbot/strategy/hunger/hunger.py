@@ -75,8 +75,9 @@ class HungerStrategy(StrategyPyBase):
         budget_allocation: Decimal,
         ask_level: int,
         bid_level: int,
-        max_order_age: int,
-        filled_order_delay: int,
+        realtime_levels_enabled: bool = False,
+        max_order_age: int = 600,
+        filled_order_delay: int = 300,
         volatility_interval: int = 60,
         avg_volatility_period: int = 5,
         max_volatility: Decimal = DECIMAL_ZERO,
@@ -87,6 +88,7 @@ class HungerStrategy(StrategyPyBase):
         self._budget_allocation = budget_allocation
         self._ask_level = ask_level
         self._bid_level = bid_level
+        self._realtime_levels_enabled = realtime_levels_enabled
         self._max_order_age = max_order_age
         self._filled_order_delay = filled_order_delay
         self._volatility_interval = volatility_interval
@@ -515,13 +517,28 @@ class HungerStrategy(StrategyPyBase):
         """
         Cancel active orders, checks if the order prices are at correct levels
         """
-        if proposal is not None and len(self.active_buys) > 0 and len(self.active_sells) > 0:
-            active_buy_prices = [Decimal(str(o.price)) for o in self.active_buys]
-            active_sell_prices = [Decimal(str(o.price)) for o in self.active_sells]
-            proposal_buy_prices = [buy.price for buy in proposal.buys]
-            proposal_sell_prices = [sell.price for sell in proposal.sells]
-            if active_buy_prices != proposal_buy_prices or active_sell_prices != proposal_sell_prices:
-                self._cancel_active_orders()
+        should_cancel = False
+
+        if (
+            self._realtime_levels_enabled is True
+            and proposal is not None
+            and len(self.active_buys) > 0
+            and len(self.active_sells) > 0
+        ):
+            for index, sell in enumerate(self.active_sells):
+                if sell.price != proposal.sells[index].price:
+                    should_cancel = True
+                    break
+
+            if should_cancel is False:
+                for index, buy in enumerate(self.active_buys):
+                    if buy.price != proposal.buys[index].price:
+                        should_cancel = True
+                        break
+
+        if should_cancel:
+            self._cancel_active_orders()
+            self.logger().info("Cancelled active orders due to realtime_levels_enabled.")
 
     def to_create_orders(self, proposal: Proposal) -> bool:
         """

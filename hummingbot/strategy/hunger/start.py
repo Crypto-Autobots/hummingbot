@@ -11,6 +11,7 @@ def start(self):
         budget_allocation = c_map.get("budget_allocation").value
         ask_level = c_map.get("ask_level").value
         bid_level = c_map.get("bid_level").value
+        realtime_levels_enabled = c_map.get("realtime_levels_enabled").value
         max_order_age = c_map.get("max_order_age").value
         filled_order_delay = c_map.get("filled_order_delay").value
         volatility_interval = c_map.get("volatility_interval").value
@@ -19,9 +20,7 @@ def start(self):
 
         self._initialize_markets([(exchange, [market])])
         base, quote = market.split("-")
-        market_info = MarketTradingPairTuple(
-            self.markets[exchange], market, base, quote
-        )
+        market_info = MarketTradingPairTuple(self.markets[exchange], market, base, quote)
         self.market_trading_pair_tuples = [market_info]
 
         self.strategy = HungerStrategy()
@@ -31,6 +30,7 @@ def start(self):
             budget_allocation=budget_allocation,
             ask_level=ask_level,
             bid_level=bid_level,
+            realtime_levels_enabled=realtime_levels_enabled,
             max_order_age=max_order_age,
             filled_order_delay=filled_order_delay,
             volatility_interval=volatility_interval,

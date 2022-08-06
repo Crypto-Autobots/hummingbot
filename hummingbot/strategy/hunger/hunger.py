@@ -24,6 +24,7 @@ from hummingbot.core.event.events import (
 )
 from hummingbot.core.utils import map_df_to_str
 from hummingbot.logger import HummingbotLogger
+from hummingbot.strategy.hunger.utils import round_non_zero
 from hummingbot.strategy.market_trading_pair_tuple import MarketTradingPairTuple
 from hummingbot.strategy.pure_market_making.pure_market_making import PriceSize, Proposal
 from hummingbot.strategy.strategy_py_base import StrategyPyBase
@@ -229,10 +230,7 @@ class HungerStrategy(StrategyPyBase):
 
     @property
     def is_within_tolerance(self) -> bool:
-        return (
-            not self._volatility.is_nan()
-            and self._volatility <= self._max_volatility / Decimal("100")
-        )
+        return not self._volatility.is_nan() and self._volatility <= self._max_volatility / Decimal("100")
 
     @property
     def is_shield_not_being_activated(self) -> bool:
@@ -262,9 +260,7 @@ class HungerStrategy(StrategyPyBase):
             if not self._exchange_ready:
                 self._exchange_ready = self.market.ready
                 if not self._exchange_ready:
-                    self.logger().warning(
-                        f"{self.market.name} is not ready. Please wait..."
-                    )
+                    self.logger().warning(f"{self.market.name} is not ready. Please wait...")
                     return
                 else:
                     self.logger().warning(f"{self.market.name} is ready. Trading started.")
@@ -325,9 +321,7 @@ class HungerStrategy(StrategyPyBase):
         """
         last_index = len(self._mid_prices) - 1
         atr = []
-        first_index = last_index - (
-            self._volatility_interval * self._avg_volatility_period
-        )
+        first_index = last_index - (self._volatility_interval * self._avg_volatility_period)
         first_index = max(first_index, 0)
         for i in range(last_index, first_index, self._volatility_interval * -1):
             prices = self._mid_prices[i - self._volatility_interval + 1: i + 1]
@@ -336,14 +330,9 @@ class HungerStrategy(StrategyPyBase):
             atr.append((max(prices) - min(prices)) / min(prices))
         if atr:
             self._volatility = mean(atr)
-        if (
-            self._last_vol_reported
-            <= self.current_timestamp - self._volatility_interval
-        ):
+        if self._last_vol_reported <= self.current_timestamp - self._volatility_interval:
             if not self._volatility.is_nan():
-                self.logger().info(
-                    f"{self.trading_pair} volatility: {self._volatility:.2%}"
-                )
+                self.logger().info(f"{self.trading_pair} volatility: {self._volatility:.2%}")
             self._last_vol_reported = self.current_timestamp
 
     def create_base_proposal(self) -> Proposal:
@@ -372,18 +361,11 @@ class HungerStrategy(StrategyPyBase):
         base_balance = self.market.get_balance(self.base_asset)
         base_balance_in_quote_asset = base_balance * self.best_bid_price
         quote_balance = self.market.get_available_balance(self.quote_asset)
-        if (
-            base_balance_in_quote_asset
-            <= self.order_amount_in_quote_asset - self.min_quote_amount
-        ):
+        if base_balance_in_quote_asset <= self.order_amount_in_quote_asset - self.min_quote_amount:
             # This allows buying a portion of the base asset
-            self.logger().info(
-                f"Base asset available balance is low {base_balance} {self.base_asset}."
-            )
+            self.logger().info(f"Base asset available balance is low {base_balance} {self.base_asset}.")
             amount = max(
-                min(
-                    self.order_amount_in_base_asset - base_balance, self.best_ask_amount
-                ),
+                min(self.order_amount_in_base_asset - base_balance, self.best_ask_amount),
                 self.min_base_amount,
             )
             order_id = self.buy_with_specific_market(
@@ -393,18 +375,11 @@ class HungerStrategy(StrategyPyBase):
                 price=self.best_ask_price,
             )
             self._budget_reallocation_orders.append(order_id)
-        elif (
-            base_balance_in_quote_asset + self.order_amount_in_quote_asset
-            >= self._budget_allocation
-        ):
+        elif base_balance_in_quote_asset + self.order_amount_in_quote_asset >= self._budget_allocation:
             # This allows selling a portion of the base asset
-            self.logger().info(
-                f"Exceeded budget allocation of {self._budget_allocation} {self.quote_asset}."
-            )
+            self.logger().info(f"Exceeded budget allocation of {self._budget_allocation} {self.quote_asset}.")
             amount = max(
-                min(
-                    base_balance - self.order_amount_in_base_asset, self.best_bid_amount
-                ),
+                min(base_balance - self.order_amount_in_base_asset, self.best_bid_amount),
                 self.min_base_amount,
             )
             order_id = self.sell_with_specific_market(
@@ -414,10 +389,7 @@ class HungerStrategy(StrategyPyBase):
                 price=self.best_bid_price,
             )
             self._budget_reallocation_orders.append(order_id)
-        elif (
-            base_balance >= self.min_base_amount * 2
-            and quote_balance < self.min_quote_amount
-        ):
+        elif base_balance >= self.min_base_amount * 2 and quote_balance < self.min_quote_amount:
             # This allows selling a portion of the base asset
             messages = [
                 f"Quote asset balance is too low - {quote_balance} {self.quote_asset}",
@@ -432,10 +404,7 @@ class HungerStrategy(StrategyPyBase):
                 price=self.best_bid_price,
             )
             self._budget_reallocation_orders.append(order_id)
-        elif (
-            base_balance < self.min_base_amount
-            and quote_balance >= self.min_quote_amount * 2
-        ):
+        elif base_balance < self.min_base_amount and quote_balance >= self.min_quote_amount * 2:
             # This allows buying a portion of the base asset
             messages = [
                 f"Base asset balance is too low - {base_balance} {self.base_asset}",
@@ -479,9 +448,7 @@ class HungerStrategy(StrategyPyBase):
         for sell in proposal.sells:
             # Adjust sell order amount to use remaining balance
             # TODO: remove this if you want to implement multi orders
-            sell.size = self.market.quantize_order_amount(
-                self.trading_pair, base_balance
-            )
+            sell.size = self.market.quantize_order_amount(self.trading_pair, base_balance)
 
             # Adjust sell order amount to use remaining balance if less than the order amount
             # if base_balance < base_amount:
@@ -508,12 +475,8 @@ class HungerStrategy(StrategyPyBase):
 
             # Adjust buy order amount to use remaining balance if less than the order amount
             if quote_balance < quote_amount:
-                adjusted_amount = quote_balance / (
-                    buy.price * (Decimal("1") + buy_fee.percent)
-                )
-                adjusted_amount = self.market.quantize_order_amount(
-                    self.trading_pair, adjusted_amount
-                )
+                adjusted_amount = quote_balance / (buy.price * (Decimal("1") + buy_fee.percent))
+                adjusted_amount = self.market.quantize_order_amount(self.trading_pair, adjusted_amount)
                 buy.size = adjusted_amount
                 quote_balance = DECIMAL_ZERO
             elif quote_balance == DECIMAL_ZERO:
@@ -552,19 +515,12 @@ class HungerStrategy(StrategyPyBase):
         """
         Cancel active orders, checks if the order prices are at correct levels
         """
-        if (
-            proposal is not None
-            and len(self.active_buys) > 0
-            and len(self.active_sells) > 0
-        ):
+        if proposal is not None and len(self.active_buys) > 0 and len(self.active_sells) > 0:
             active_buy_prices = [Decimal(str(o.price)) for o in self.active_buys]
             active_sell_prices = [Decimal(str(o.price)) for o in self.active_sells]
             proposal_buy_prices = [buy.price for buy in proposal.buys]
             proposal_sell_prices = [sell.price for sell in proposal.sells]
-            if (
-                active_buy_prices != proposal_buy_prices
-                or active_sell_prices != proposal_sell_prices
-            ):
+            if active_buy_prices != proposal_buy_prices or active_sell_prices != proposal_sell_prices:
                 self._cancel_active_orders()
 
     def to_create_orders(self, proposal: Proposal) -> bool:
@@ -622,12 +578,7 @@ class HungerStrategy(StrategyPyBase):
         """
         An order has been filled in the market. Argument is a OrderFilledEvent object.
         """
-        fees = ", ".join(
-            [
-                f"{fee.amount} {fee.token}"
-                for fee in order_filled_event.trade_fee.flat_fees
-            ]
-        )
+        fees = ", ".join([f"{fee.amount} {fee.token}" for fee in order_filled_event.trade_fee.flat_fees])
         messages = [
             f"{order_filled_event.trade_type.name} order filled",
             f"Price: {order_filled_event.price} {self.quote_asset}",
@@ -687,10 +638,7 @@ class HungerStrategy(StrategyPyBase):
         """
         Activate shield unless budget reallocation
         """
-        if (
-            self.is_applied_budget_reallocation is False
-            and self.is_shield_not_being_activated
-        ):
+        if self.is_applied_budget_reallocation is False and self.is_shield_not_being_activated:
             self._create_timestamp = self.current_timestamp + self._filled_order_delay
             until = datetime.fromtimestamp(self._create_timestamp)
             self.notify(f"Shielded up until {until} {until.astimezone().tzname()}.")
@@ -716,10 +664,7 @@ class HungerStrategy(StrategyPyBase):
 
         # Current market data
         markets_df = map_df_to_str(self.market_status_data_frame([self._market_info]))
-        lines.extend(
-            ["", "Markets:"]
-            + ["    " + line for line in markets_df.to_string(index=False).split("\n")]
-        )
+        lines.extend(["", "Markets:"] + ["    " + line for line in markets_df.to_string(index=False).split("\n")])
 
         # Volatility
         shields_df = map_df_to_str(self.shields)
@@ -730,21 +675,15 @@ class HungerStrategy(StrategyPyBase):
 
         # Current trading balance
         wallet_df = map_df_to_str(self.wallet_balance_data_frame([self._market_info]))
-        lines.extend(
-            ["", "Balance:"]
-            + ["    " + line for line in wallet_df.to_string(index=False).split("\n")]
-        )
+        wallet_df["Total Balance"] = wallet_df["Total Balance"].apply(lambda x: str(round_non_zero(float(x))))
+        wallet_df["Available Balance"] = wallet_df["Available Balance"].apply(lambda x: str(round_non_zero(float(x))))
+        lines.extend(["", "Balance:"] + ["    " + line for line in wallet_df.to_string(index=False).split("\n")])
 
         # Current active orders
         if self.has_active_orders:
             orders_df = map_df_to_str(self.active_orders_data_frame)
-            lines.extend(
-                ["", "Orders:"]
-                + [
-                    "    " + line
-                    for line in orders_df.to_string(index=False).split("\n")
-                ]
-            )
+            orders_df["Amount"] = orders_df["Amount"].apply(lambda x: str(round_non_zero(float(x))))
+            lines.extend(["", "Orders:"] + ["    " + line for line in orders_df.to_string(index=False).split("\n")])
         else:
             lines.extend(["", "No active maker orders."])
 

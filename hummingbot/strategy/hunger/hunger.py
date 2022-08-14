@@ -140,10 +140,12 @@ class HungerStrategy(StrategyPyBase):
             age = pd.Timestamp(order_age(order, self.current_timestamp), unit="s").strftime("%H:%M:%S")
             # Find actual order levels on orderbook
             if order.is_buy:
-                level = self.bids_df["price"].index[self.bids_df["price"] <= order.price].to_list()[0] + 1
+                series = self.bids_df["price"].index[self.bids_df["price"] == float(order.price)]
+                level = series.to_list()[0] + 1
                 side = "buy"
             else:
-                level = self.asks_df["price"].index[self.asks_df["price"] >= order.price].to_list()[0] + 1
+                series = self.asks_df["price"].index[self.asks_df["price"] == float(order.price)]
+                level = series.to_list()[0] + 1
                 side = "sell"
             data.append(
                 [
@@ -235,14 +237,14 @@ class HungerStrategy(StrategyPyBase):
         return not self._volatility.is_nan() and self._volatility <= self._max_volatility / Decimal("100")
 
     @property
-    def is_shield_not_being_activated(self) -> bool:
+    def is_time_shield_not_being_activated(self) -> bool:
         return self._create_timestamp < self.current_timestamp
 
     @property
     def shields(self) -> pd.DataFrame:
         return pd.DataFrame(
             [
-                ["Time", not self.is_shield_not_being_activated],
+                ["Time", not self.is_time_shield_not_being_activated],
                 ["Volatility", not self.is_within_tolerance],
             ],
             columns=[
@@ -275,7 +277,7 @@ class HungerStrategy(StrategyPyBase):
             self.update_volatility()
 
             proposal = None
-            if self.is_shield_not_being_activated:
+            if self.is_time_shield_not_being_activated:
                 # Create base order proposals
                 proposal = self.create_base_proposal()
                 # Cancel active orders based on proposal prices
@@ -498,8 +500,7 @@ class HungerStrategy(StrategyPyBase):
         """
         self._created_timestamp = 0  # reset created timestamp
         for order in self.active_orders:
-            if order.client_order_id not in self.in_flight_cancels.keys():
-                self.cancel_order(self._market_info, order.client_order_id)
+            self.cancel_order(self._market_info, order.client_order_id)
 
     def cancel_active_orders_by_max_order_age(self):
         """
@@ -507,7 +508,6 @@ class HungerStrategy(StrategyPyBase):
         """
         if (
             self.has_active_orders
-            and self._created_timestamp != 0
             and self.current_timestamp - self._created_timestamp > self._max_order_age
         ):
             self._cancel_active_orders()
@@ -522,8 +522,10 @@ class HungerStrategy(StrategyPyBase):
         if (
             self._realtime_levels_enabled is True
             and proposal is not None
-            and len(self.active_buys) > 0
-            and len(self.active_sells) > 0
+            and (
+                len(self.active_buys) > 0
+                or len(self.active_sells) > 0
+            )
         ):
             for index, sell in enumerate(self.active_sells):
                 if sell.price != proposal.sells[index].price:
@@ -655,7 +657,7 @@ class HungerStrategy(StrategyPyBase):
         """
         Activate shield unless budget reallocation
         """
-        if self.is_applied_budget_reallocation is False and self.is_shield_not_being_activated:
+        if self.is_applied_budget_reallocation is False and self.is_time_shield_not_being_activated:
             self._create_timestamp = self.current_timestamp + self._filled_order_delay
             until = datetime.fromtimestamp(self._create_timestamp)
             self.notify(f"Shielded up until {until} {until.astimezone().tzname()}.")

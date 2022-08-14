@@ -500,7 +500,13 @@ class HungerStrategy(StrategyPyBase):
         """
         self._created_timestamp = 0  # reset created timestamp
         for order in self.active_orders:
-            self.cancel_order(self._market_info, order.client_order_id)
+            try:
+                self.cancel_order(self._market_info, order.client_order_id)
+            except ValueError as exc:
+                exc_msg = str(exc)
+                if all(msg in exc_msg for msg in ["Failed to cancel order", "Order not found"]):
+                    self.stop_tracking_limit_order(self.trading_pair, order.client_order_id)
+                    self.logger().info(f"Order {order.client_order_id} not found. Stop tracking.")
 
     def cancel_active_orders_by_max_order_age(self):
         """

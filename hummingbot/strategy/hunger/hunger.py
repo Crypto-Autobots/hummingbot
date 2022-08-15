@@ -495,7 +495,8 @@ class HungerStrategy(StrategyPyBase):
         for order in self.active_orders:
             self._force_cancel_order(order.client_order_id)
 
-        # Clear all active orders (ascendex only)
+        # ascend_ex only
+        # Clear all active orders
         if (
             self.market.name == "ascend_ex"
             and len(self.active_orders) == 0
@@ -510,11 +511,13 @@ class HungerStrategy(StrategyPyBase):
         Force cancel an order
         """
         self.cancel_order(self._market_info, order_id)
-        # If no order is found on remote exchange, manually remove it from tracked orders
-        non_tracked_order = self.market._in_flight_order_tracker.fetch_cached_order(order_id)
-        if non_tracked_order is None:
-            self.stop_tracking_limit_order(self._market_info, order_id)
-            self.logger().info(f"Order {order_id} is not found. Stop tracking.")
+        #  ascend_ex only
+        #  If no order is found on remote exchange, manually remove it from tracked orders
+        if self.market.name == "ascend_ex":
+            non_tracked_order = self.market._in_flight_order_tracker.fetch_cached_order(order_id)
+            if non_tracked_order is None:
+                self.stop_tracking_limit_order(self._market_info, order_id)
+                self.logger().info(f"Order {order_id} is not found. Stop tracking.")
 
     def cancel_active_orders_by_max_order_age(self):
         """

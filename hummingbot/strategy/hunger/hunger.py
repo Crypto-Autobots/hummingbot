@@ -490,13 +490,30 @@ class HungerStrategy(StrategyPyBase):
         Cancel all active orders if any
         """
         self._created_timestamp = 0  # reset created timestamp
+
+        # Cancel all active orders
         for order in self.active_orders:
-            self.cancel_order(self._market_info, order.client_order_id)
-            # If no order is found on remote exchange, manually remove it from tracked orders
-            non_tracked_order = self.market._in_flight_order_tracker.fetch_cached_order(order.client_order_id)
-            if non_tracked_order is None:
-                self.stop_tracking_limit_order(self._market_info, order.client_order_id)
-                self.logger().info(f"Order {order.client_order_id} is not found. Stop tracking.")
+            self._force_cancel_order(order.client_order_id)
+
+        # Clear all active orders
+        if (
+            len(self.active_orders) == 0
+            and len(self._sb_order_tracker.in_flight_cancels) == 0
+            and len(self.market._in_flight_order_tracker.active_orders) > 0
+        ):
+            for client_order_id, _ in self.market._in_flight_order_tracker.active_orders.items():
+                self._force_cancel_order(client_order_id)
+
+    def _force_cancel_order(self, order_id: str):
+        """
+        Force cancel an order
+        """
+        self.cancel_order(self._market_info, order_id)
+        # If no order is found on remote exchange, manually remove it from tracked orders
+        non_tracked_order = self.market._in_flight_order_tracker.fetch_cached_order(order_id)
+        if non_tracked_order is None:
+            self.stop_tracking_limit_order(self._market_info, order_id)
+            self.logger().info(f"Order {order_id} is not found. Stop tracking.")
 
     def cancel_active_orders_by_max_order_age(self):
         """
@@ -601,10 +618,10 @@ class HungerStrategy(StrategyPyBase):
             f"Fee: {fees}",
         ]
         if order_filled_event.order_id not in self._budget_reallocation_orders:
-            self.shield_up()
+            self._shield_up()
         else:
             messages.append("Budget reallocation applied, not activating shield.")
-        self.notify(messages)
+        self._notify(messages)
         # Cancel all orders even if they are in the budget_reallocation_orders
         # - prevent partially unfilled orders if applying budget reallocation
         # - prevent filling more asset if not in budget reallocation phase
@@ -620,10 +637,10 @@ class HungerStrategy(StrategyPyBase):
             f"({order_complete_event.quote_asset_amount} {order_complete_event.quote_asset})",
         ]
         if order_complete_event.order_id not in self._budget_reallocation_orders:
-            self.shield_up()
+            self._shield_up()
         else:
             messages.append("Budget reallocation applied, not activating shield.")
-        self.notify(messages)
+        self._notify(messages)
         self._cancel_active_orders()
 
     def did_complete_sell_order(self, order_complete_event: SellOrderCompletedEvent):
@@ -636,10 +653,10 @@ class HungerStrategy(StrategyPyBase):
             f"({order_complete_event.quote_asset_amount} {order_complete_event.quote_asset})",
         ]
         if order_complete_event.order_id not in self._budget_reallocation_orders:
-            self.shield_up()
+            self._shield_up()
         else:
             messages.append("Budget reallocation applied, not activating shield.")
-        self.notify(messages)
+        self._notify(messages)
         self._cancel_active_orders()
 
     def did_cancel_order(self, cancelled_event: OrderCancelledEvent):
@@ -649,23 +666,23 @@ class HungerStrategy(StrategyPyBase):
         # Cancel all orders if there is some manually cancelled order
         self._cancel_active_orders()
 
-    def shield_up(self):
+    def _shield_up(self):
         """
         Activate shield unless budget reallocation
         """
         if self.is_applied_budget_reallocation is False and self.is_time_shield_not_being_activated:
             self._create_timestamp = self.current_timestamp + self._filled_order_delay
             until = datetime.fromtimestamp(self._create_timestamp)
-            self.notify(f"Shielded up until {until} {until.astimezone().tzname()}.")
+            self._notify(f"Shielded up until {until} {until.astimezone().tzname()}.")
 
-    def notify(self, messages: Union[list, str], separator: str = ". "):
+    def _notify(self, messages: Union[list, str], separator: str = ". "):
         """
         Notify the user via both logger and hb app
         """
         if type(messages) is list:
             messages = separator.join(messages)
         self.logger().info(messages)
-        self.notify_hb_app(messages)
+        self._notify_hb_app(messages)
 
     def format_status(self):
         """

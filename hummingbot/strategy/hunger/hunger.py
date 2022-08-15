@@ -495,9 +495,10 @@ class HungerStrategy(StrategyPyBase):
         for order in self.active_orders:
             self._force_cancel_order(order.client_order_id)
 
-        # Clear all active orders
+        # Clear all active orders (ascendex only)
         if (
-            len(self.active_orders) == 0
+            self.market.name == "ascend_ex"
+            and len(self.active_orders) == 0
             and len(self._sb_order_tracker.in_flight_cancels) == 0
             and len(self.market._in_flight_order_tracker.active_orders) > 0
         ):

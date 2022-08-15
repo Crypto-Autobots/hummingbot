@@ -11,7 +11,6 @@ import pandas as pd
 from hummingbot.connector.exchange_base import ExchangeBase
 from hummingbot.connector.trading_rule import TradingRule
 from hummingbot.core.data_type.limit_order import LimitOrder
-from hummingbot.core.data_type.order_book import OrderBook
 from hummingbot.core.event.events import (
     BuyOrderCompletedEvent,
     BuyOrderCreatedEvent,
@@ -169,20 +168,12 @@ class HungerStrategy(StrategyPyBase):
         return [o for o in self.active_orders if not o.is_buy]
 
     @property
-    def in_flight_cancels(self) -> Dict[str, float]:
-        return self._sb_order_tracker.in_flight_cancels
-
-    @property
-    def order_book(self) -> OrderBook:
-        return self._market_info.order_book
-
-    @property
     def asks_df(self) -> pd.DataFrame:
-        return self.order_book.snapshot[1]
+        return self._market_info.order_book.snapshot[1]
 
     @property
     def bids_df(self) -> pd.DataFrame:
-        return self.order_book.snapshot[0]
+        return self._market_info.order_book.snapshot[0]
 
     @property
     def order_amount_in_base_asset(self) -> Decimal:
@@ -500,13 +491,12 @@ class HungerStrategy(StrategyPyBase):
         """
         self._created_timestamp = 0  # reset created timestamp
         for order in self.active_orders:
-            try:
-                self.cancel_order(self._market_info, order.client_order_id)
-            except ValueError as exc:
-                exc_msg = str(exc)
-                if all(msg in exc_msg for msg in ["Failed to cancel order", "Order not found"]):
-                    self.stop_tracking_limit_order(self.trading_pair, order.client_order_id)
-                    self.logger().info(f"Order {order.client_order_id} not found. Stop tracking.")
+            self.cancel_order(self._market_info, order.client_order_id)
+            # If no order is found on remote exchange, manually remove it from tracked orders
+            non_tracked_order = self.market._in_flight_order_tracker.fetch_cached_order(order.client_order_id)
+            if non_tracked_order is None:
+                self.stop_tracking_limit_order(self._market_info, order.client_order_id)
+                self.logger().info(f"Order {order.client_order_id} is not found. Stop tracking.")
 
     def cancel_active_orders_by_max_order_age(self):
         """
@@ -554,7 +544,7 @@ class HungerStrategy(StrategyPyBase):
         """
         return (
             proposal is not None
-            and len(self.in_flight_cancels) == 0
+            and len(self._sb_order_tracker.in_flight_cancels) == 0
             and (len(self.active_buys) == 0 or len(self.active_sells) == 0)
             and (len(proposal.buys) > 0 and len(proposal.sells) > 0)
             and self.is_applied_budget_reallocation is False

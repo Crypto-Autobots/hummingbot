@@ -686,7 +686,7 @@ class HungerStrategy(StrategyPyBase):
         if type(messages) is list:
             messages = separator.join(messages)
         self.logger().info(messages)
-        self._notify_hb_app(messages)
+        self.notify_hb_app(messages)
 
     def format_status(self):
         """

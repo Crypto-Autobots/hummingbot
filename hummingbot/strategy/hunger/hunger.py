@@ -535,14 +535,13 @@ class HungerStrategy(StrategyPyBase):
         Cancel active orders, checks if the order prices are at correct levels
         """
         should_cancel = False
+        len_active_buys = len(self.active_buys)
+        len_active_sells = len(self.active_sells)
 
         if (
             self._realtime_levels_enabled is True
             and proposal is not None
-            and (
-                len(self.active_buys) > 0
-                or len(self.active_sells) > 0
-            )
+            and (len_active_buys > 0 or len_active_sells > 0)
         ):
             for index, sell in enumerate(self.active_sells):
                 if sell.price != proposal.sells[index].price:
@@ -554,6 +553,13 @@ class HungerStrategy(StrategyPyBase):
                     if buy.price != proposal.buys[index].price:
                         should_cancel = True
                         break
+
+        if (
+            should_cancel is False
+            and len_active_buys != len_active_sells
+            and self.current_timestamp - self._created_timestamp > 3
+        ):
+            should_cancel = True
 
         if should_cancel:
             self._cancel_active_orders()

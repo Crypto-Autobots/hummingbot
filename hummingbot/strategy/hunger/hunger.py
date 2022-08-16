@@ -181,7 +181,14 @@ class HungerStrategy(StrategyPyBase):
 
     @property
     def order_amount_in_quote_asset(self):
-        fee = self.get_fee(self._order_amount)
+        fee = self.market.get_fee(
+            self.base_asset,
+            self.quote_asset,
+            OrderType.LIMIT,
+            TradeType.BUY,
+            self._order_amount,
+            self.mid_price,
+        )
         return self._order_amount * (Decimal("1") + fee.percent)
 
     @property
@@ -276,10 +283,6 @@ class HungerStrategy(StrategyPyBase):
                 # Apply budget reallocation
                 if self.is_within_tolerance and self.has_active_orders is False:
                     self.apply_budget_reallocation()
-                # Apply functions that modify orders price
-                # self.apply_order_price_modifiers(proposal)
-                # Apply functions that modify orders amount
-                # self.apply_order_amount_modifiers(proposal)
                 # Apply budget constraint, i.e. can't buy/sell more than what you have.
                 self.apply_budget_constraint(proposal)
 
@@ -287,19 +290,6 @@ class HungerStrategy(StrategyPyBase):
                 self.execute_orders_proposal(proposal)
         except Exception as exc:
             self.logger().error(f"Unhandled exception in tick function: {exc}")
-
-    def get_fee(self, amount: Decimal):
-        """
-        Calculate fee based on order amount
-        """
-        return self.market.get_fee(
-            self.base_asset,
-            self.quote_asset,
-            OrderType.LIMIT,
-            TradeType.BUY,
-            amount,
-            self.mid_price,
-        )
 
     def update_mid_prices(self):
         """
@@ -427,14 +417,6 @@ class HungerStrategy(StrategyPyBase):
             # Clear all budget reallocation orders if there is no need to reallocate
             self._budget_reallocation_orders = []
 
-    def apply_order_price_modifiers(self, proposal: Proposal):
-        # TODO: implement price modifiers
-        self.logger().debug(f"Applied order price modifiers to proposal: {proposal}")
-
-    def apply_order_amount_modifiers(self, proposal: Proposal):
-        # TODO: implement amount modifiers
-        self.logger().debug(f"Applied order amount modifiers to proposal: {proposal}")
-
     def apply_budget_constraint(self, proposal: Proposal):
         """
         Calculate available budget on each asset for multiple levels of orders
@@ -495,8 +477,7 @@ class HungerStrategy(StrategyPyBase):
         for order in self.active_orders:
             self._force_cancel_order(order.client_order_id)
 
-        # ascend_ex only
-        # Clear all active orders
+        # Clear all active orders (ascend_ex only)
         if (
             self.market.name == "ascend_ex"
             and len(self.active_orders) == 0
@@ -511,8 +492,8 @@ class HungerStrategy(StrategyPyBase):
         Force cancel an order
         """
         self.cancel_order(self._market_info, order_id)
-        #  ascend_ex only
-        #  If no order is found on remote exchange, manually remove it from tracked orders
+
+        #  If no order is found on remote exchange, manually remove it from tracked orders (ascend_ex only)
         if self.market.name == "ascend_ex":
             non_tracked_order = self.market._in_flight_order_tracker.fetch_cached_order(order_id)
             if non_tracked_order is None:
@@ -538,6 +519,7 @@ class HungerStrategy(StrategyPyBase):
         len_active_buys = len(self.active_buys)
         len_active_sells = len(self.active_sells)
 
+        # Ensure correct buy/sell levels
         if (
             self._realtime_levels_enabled is True
             and proposal is not None
@@ -554,6 +536,7 @@ class HungerStrategy(StrategyPyBase):
                         should_cancel = True
                         break
 
+        # Ensure number of buys and sells are the same
         if (
             should_cancel is False
             and len_active_buys != len_active_sells
@@ -620,13 +603,14 @@ class HungerStrategy(StrategyPyBase):
         """
         An order has been filled in the market. Argument is a OrderFilledEvent object.
         """
-        fees = ", ".join([f"{fee.amount} {fee.token}" for fee in order_filled_event.trade_fee.flat_fees])
         messages = [
             f"{order_filled_event.trade_type.name} order filled",
             f"Price: {order_filled_event.price} {self.quote_asset}",
             f"Amount: {order_filled_event.amount} {self.base_asset}",
-            f"Fee: {fees}",
         ]
+        fees = ", ".join([f"{fee.amount} {fee.token}" for fee in order_filled_event.trade_fee.flat_fees])
+        if fees:
+            messages.append(f"Fees: {fees}")
         if order_filled_event.order_id not in self._budget_reallocation_orders:
             self._shield_up()
         else:

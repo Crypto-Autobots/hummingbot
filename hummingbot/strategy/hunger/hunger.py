@@ -421,7 +421,7 @@ class HungerStrategy(StrategyPyBase):
         """
         Calculate available budget on each asset for multiple levels of orders
         """
-        base_balance = self.market.get_available_balance(self.base_asset)
+        base_balance = self.market.get_balance(self.base_asset)
         for sell in proposal.sells:
             # Adjust sell order amount to use remaining balance
             # TODO: remove this if you want to implement multi orders

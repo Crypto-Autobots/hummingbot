@@ -466,21 +466,21 @@ class HungerStrategy(StrategyPyBase):
     def _cancel_active_orders(self):
         """
         Cancel all active orders if any
+        - Cancelling an order might be failed by any reason
         """
         self._created_timestamp = 0  # reset created timestamp
 
-        # Cancel all active orders
-        for order in self.active_orders:
-            self._force_cancel_order(order.client_order_id)
-
-        # Clear all active orders (ascend_ex only)
-        if (
+        if self.has_active_orders > 0:
+            # Cancel all active orders
+            for order in self.active_orders:
+                self._force_cancel_order(order.client_order_id)
+        elif (
             self.market.name == "ascend_ex"
-            and len(self.active_orders) == 0
             and len(self.order_tracker.in_flight_cancels) == 0
-            and len(self.market._in_flight_order_tracker.active_orders) > 0
+            and len(self.market.in_flight_orders) > 0
         ):
-            for client_order_id, _ in self.market._in_flight_order_tracker.active_orders.items():
+            # Clear all active orders (ascend_ex only)
+            for client_order_id, _ in self.market.in_flight_orders.items():
                 self._force_cancel_order(client_order_id)
 
     def _force_cancel_order(self, order_id: str):
@@ -513,43 +513,42 @@ class HungerStrategy(StrategyPyBase):
         Cancel active orders, checks if the order prices are at correct levels
         """
         should_cancel = False
-        len_active_buys = len(self.active_buys)
-        len_active_sells = len(self.active_sells)
-        len_proposal_buys = len(proposal.buys)
-        len_proposal_sells = len(proposal.sells)
 
-        # Ensure number of buys and sells are the same
-        if (
-            should_cancel is False
-            and (
-                len_active_buys != len_active_sells
-                or len_proposal_buys != len_active_buys
-                or len_proposal_sells != len_active_sells
-            )
-            and self.current_timestamp - self._created_timestamp > 3
-        ):
-            should_cancel = True
+        # Cancel all active orders by conditions
+        if self.has_active_orders > 0:
+            len_active_buys = len(self.active_buys)
+            len_active_sells = len(self.active_sells)
+            len_proposal_buys = len(proposal.buys)
+            len_proposal_sells = len(proposal.sells)
 
-        # Ensure correct buy/sell levels
-        if (
-            self._realtime_levels_enabled is True
-            and proposal is not None
-            and (len_active_buys > 0 or len_active_sells > 0)
-        ):
-            for index, sell in enumerate(self.active_sells):
-                if index == len_proposal_sells:  # prevent index out of range
-                    break
-                if sell.price != proposal.sells[index].price:
-                    should_cancel = True
-                    break
+            # Ensure proposal buys and sells are the same as active buys and sells
+            if len_proposal_buys != len_active_buys or len_proposal_sells != len_active_sells:
+                should_cancel = True
 
-            if should_cancel is False:
-                for index, buy in enumerate(self.active_buys):
-                    if index == len_proposal_buys:  # prevent index out of range
+            # Ensure correct buy/sell levels
+            if should_cancel is False and self._realtime_levels_enabled is True and proposal is not None:
+                for index, sell in enumerate(self.active_sells):
+                    if index == len_proposal_sells:  # prevent index out of range
                         break
-                    if buy.price != proposal.buys[index].price:
+                    if sell.price != proposal.sells[index].price:
                         should_cancel = True
                         break
+
+                if should_cancel is False:
+                    for index, buy in enumerate(self.active_buys):
+                        if index == len_proposal_buys:  # prevent index out of range
+                            break
+                        if buy.price != proposal.buys[index].price:
+                            should_cancel = True
+                            break
+
+            # Ensure number of buys and sells are the same
+            if (
+                should_cancel is False
+                and len_active_buys != len_active_sells
+                and self.current_timestamp - self._created_timestamp > 3
+            ):
+                should_cancel = True
 
         if should_cancel:
             self._cancel_active_orders()

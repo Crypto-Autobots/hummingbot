@@ -54,6 +54,7 @@ class HungerStrategy(StrategyPyBase):
         # Global timestamp
         self._create_timestamp = 0
         self._created_timestamp = 0
+        self._cancelled_timestamp = 0
         # Global states
         self._budget_reallocation_orders = []
         self._mid_prices = []
@@ -118,6 +119,10 @@ class HungerStrategy(StrategyPyBase):
     @property
     def has_active_orders(self) -> bool:
         return len(self.active_orders) > 0
+
+    @property
+    def has_in_flight_cancels(self) -> bool:
+        return len(self.order_tracker.in_flight_cancels) > 0
 
     @property
     def active_orders_data_frame(self) -> pd.DataFrame:
@@ -266,7 +271,6 @@ class HungerStrategy(StrategyPyBase):
             self.update_mid_prices()
             self.update_volatility()
 
-            proposal = None
             if self.is_time_shield_not_being_activated:
                 # Create base order proposals
                 proposal = self.create_base_proposal()
@@ -277,9 +281,9 @@ class HungerStrategy(StrategyPyBase):
                     self.apply_budget_reallocation()
                 # Apply budget constraint, i.e. can't buy/sell more than what you have.
                 self.apply_budget_constraint(proposal)
-
-            if self.to_create_orders(proposal):
-                self.execute_orders_proposal(proposal)
+                # Whether to create new orders or not
+                if self.to_create_orders(proposal):
+                    self.execute_orders_proposal(proposal)
         except Exception as exc:
             self.logger().error(f"Unhandled exception in tick function: {str(exc)}", exc_info=True)
 
@@ -398,7 +402,7 @@ class HungerStrategy(StrategyPyBase):
             )
             self._budget_reallocation_orders.append(order_id)
         elif base_balance_in_quote_asset + quote_balance < self.min_quote_amount * 2:
-            self.logger().error(
+            self.logger().info(
                 "Insufficient balance! Require at least:"
                 f"- {self.min_base_amount} {self.base_asset} for SELL side"
                 f"- Current: {base_balance} {self.base_asset}"
@@ -469,19 +473,22 @@ class HungerStrategy(StrategyPyBase):
         - Cancelling an order might be failed by any reason
         """
         self._created_timestamp = 0  # reset created timestamp
+        self._cancelled_timestamp = self.current_timestamp  # last cancelled timestamp
 
-        if self.has_active_orders > 0:
+        if self.has_active_orders is True:
             # Cancel all active orders
             for order in self.active_orders:
                 self._force_cancel_order(order.client_order_id)
+            self.logger().info("Cancelled all active orders.")
         elif (
             self.market.name == "ascend_ex"
-            and len(self.order_tracker.in_flight_cancels) == 0
+            and self.has_in_flight_cancels is False
             and len(self.market.in_flight_orders) > 0
         ):
             # Clear all active orders (ascend_ex only)
             for client_order_id, _ in self.market.in_flight_orders.items():
                 self._force_cancel_order(client_order_id)
+            self.logger().info("Cancelled in flight orders if any.")
 
     def _force_cancel_order(self, order_id: str):
         """
@@ -501,7 +508,7 @@ class HungerStrategy(StrategyPyBase):
         Cancel active orders if they are older than max age limit
         """
         if (
-            self.has_active_orders
+            self.has_active_orders is True
             and self._created_timestamp > 0
             and self.current_timestamp - self._created_timestamp > self._max_order_age
         ):
@@ -515,7 +522,7 @@ class HungerStrategy(StrategyPyBase):
         should_cancel = False
 
         # Cancel all active orders by conditions
-        if self.has_active_orders > 0:
+        if self.has_active_orders is True:
             len_active_buys = len(self.active_buys)
             len_active_sells = len(self.active_sells)
             len_proposal_buys = len(proposal.buys)
@@ -524,6 +531,7 @@ class HungerStrategy(StrategyPyBase):
             # Ensure proposal buys and sells are the same as active buys and sells
             if len_proposal_buys != len_active_buys or len_proposal_sells != len_active_sells:
                 should_cancel = True
+                self.logger().info("Cancelled active orders due to proposal updates.")
 
             # Ensure correct buy/sell levels
             if should_cancel is False and self._realtime_levels_enabled is True and proposal is not None:
@@ -532,6 +540,12 @@ class HungerStrategy(StrategyPyBase):
                         break
                     if sell.price != proposal.sells[index].price:
                         should_cancel = True
+                        self.logger().info(
+                            "Sell price at level {} changed {} {}.".format(
+                                index, proposal.sells[index].price, self.quote_asset
+                            )
+                        )
+                        self.logger().info("Cancelled active orders due to realtime_levels_enabled.")
                         break
 
                 if should_cancel is False:
@@ -540,6 +554,12 @@ class HungerStrategy(StrategyPyBase):
                             break
                         if buy.price != proposal.buys[index].price:
                             should_cancel = True
+                            self.logger().info(
+                                "Buy price at level {} changed {} {}.".format(
+                                    index, proposal.sells[index].price, self.quote_asset
+                                )
+                            )
+                            self.logger().info("Cancelled active orders due to realtime_levels_enabled.")
                             break
 
             # Ensure number of buys and sells are the same
@@ -549,10 +569,15 @@ class HungerStrategy(StrategyPyBase):
                 and self.current_timestamp - self._created_timestamp > 3
             ):
                 should_cancel = True
+                self.logger().info("Number of buys and sells need to equalize.")
+
+        elif self.has_in_flight_cancels is True and self.current_timestamp - self._cancelled_timestamp > 3:
+            # Cancel all in-flight cancels if any
+            should_cancel = True
+            self.logger().info("Bot get stuck by in_flight_cancels.")
 
         if should_cancel:
             self._cancel_active_orders()
-            self.logger().info("Cancelled active orders due to realtime_levels_enabled.")
 
     def to_create_orders(self, proposal: Proposal) -> bool:
         """
@@ -560,12 +585,12 @@ class HungerStrategy(StrategyPyBase):
         """
         return (
             proposal is not None
-            # and len(self.order_tracker.in_flight_cancels) == 0
-            and self._created_timestamp == 0
-            and (len(self.active_buys) == 0 or len(self.active_sells) == 0)
             and (len(proposal.buys) > 0 and len(proposal.sells) > 0)
+            and self._created_timestamp == 0
+            and self.has_in_flight_cancels is False
+            and self.has_active_orders is False
             and self.is_applied_budget_reallocation is False
-            and self.is_within_tolerance
+            and self.is_within_tolerance is True
         )
 
     def execute_orders_proposal(self, proposal: Proposal):
@@ -610,58 +635,55 @@ class HungerStrategy(StrategyPyBase):
         """
         An order has been filled in the market. Argument is a OrderFilledEvent object.
         """
-        if order_filled_event.amount > 0:
-            messages = [
-                f"{order_filled_event.trade_type.name} order filled",
-                f"Price: {order_filled_event.price} {self.quote_asset}",
-                f"Amount: {order_filled_event.amount} {self.base_asset}",
-            ]
-            fees = ", ".join([f"{fee.amount} {fee.token}" for fee in order_filled_event.trade_fee.flat_fees])
-            if fees:
-                messages.append(f"Fees: {fees}")
-            if order_filled_event.order_id not in self._budget_reallocation_orders:
-                self._shield_up()
-            else:
-                messages.append("Budget reallocation applied, not activating shield.")
-            self._notify(messages)
-            # Cancel all orders even if they are in the budget_reallocation_orders
-            # - prevent partially unfilled orders if applying budget reallocation
-            # - prevent filling more asset if not in budget reallocation phase
-            self._cancel_active_orders()
+        messages = [
+            f"{order_filled_event.trade_type.name} order filled",
+            f"Price: {order_filled_event.price} {self.quote_asset}",
+            f"Amount: {order_filled_event.amount} {self.base_asset}",
+        ]
+        fees = ", ".join([f"{fee.amount} {fee.token}" for fee in order_filled_event.trade_fee.flat_fees])
+        if fees:
+            messages.append(f"Fees: {fees}")
+        if order_filled_event.order_id not in self._budget_reallocation_orders:
+            self._shield_up()
+        else:
+            messages.append("Budget reallocation applied, not activating shield.")
+        self._notify(messages)
+        # Cancel all orders even if they are in the budget_reallocation_orders
+        # - prevent partially unfilled orders if applying budget reallocation
+        # - prevent filling more asset if not in budget reallocation phase
+        self._cancel_active_orders()
 
     def did_complete_buy_order(self, order_complete_event: BuyOrderCompletedEvent):
         """
         A buy order has been completed.
         """
-        if order_complete_event.base_asset_amount > 0:
-            messages = [
-                "BUY order completed",
-                f"{order_complete_event.base_asset_amount} {order_complete_event.base_asset} "
-                f"({order_complete_event.quote_asset_amount} {order_complete_event.quote_asset})",
-            ]
-            if order_complete_event.order_id not in self._budget_reallocation_orders:
-                self._shield_up()
-            else:
-                messages.append("Budget reallocation applied, not activating shield.")
-            self._notify(messages)
-            self._cancel_active_orders()
+        messages = [
+            "BUY order completed",
+            f"{order_complete_event.base_asset_amount} {order_complete_event.base_asset} "
+            f"({order_complete_event.quote_asset_amount} {order_complete_event.quote_asset})",
+        ]
+        if order_complete_event.order_id not in self._budget_reallocation_orders:
+            self._shield_up()
+        else:
+            messages.append("Budget reallocation applied, not activating shield.")
+        self._notify(messages)
+        self._cancel_active_orders()
 
     def did_complete_sell_order(self, order_complete_event: SellOrderCompletedEvent):
         """
         A sell order has been completed.
         """
-        if order_complete_event.base_asset_amount > 0:
-            messages = [
-                "SELL order completed",
-                f"{order_complete_event.base_asset_amount} {order_complete_event.base_asset} "
-                f"({order_complete_event.quote_asset_amount} {order_complete_event.quote_asset})",
-            ]
-            if order_complete_event.order_id not in self._budget_reallocation_orders:
-                self._shield_up()
-            else:
-                messages.append("Budget reallocation applied, not activating shield.")
-            self._notify(messages)
-            self._cancel_active_orders()
+        messages = [
+            "SELL order completed",
+            f"{order_complete_event.base_asset_amount} {order_complete_event.base_asset} "
+            f"({order_complete_event.quote_asset_amount} {order_complete_event.quote_asset})",
+        ]
+        if order_complete_event.order_id not in self._budget_reallocation_orders:
+            self._shield_up()
+        else:
+            messages.append("Budget reallocation applied, not activating shield.")
+        self._notify(messages)
+        self._cancel_active_orders()
 
     def did_cancel_order(self, cancelled_event: OrderCancelledEvent):
         """
@@ -716,7 +738,7 @@ class HungerStrategy(StrategyPyBase):
         lines.extend(["", "Balance:"] + ["    " + line for line in wallet_df.to_string(index=False).split("\n")])
 
         # Current active orders
-        if self.has_active_orders:
+        if self.has_active_orders is True:
             orders_df = map_df_to_str(self.active_orders_data_frame)
             orders_df["Amount"] = orders_df["Amount"].apply(lambda x: str(round_non_zero(float(x))))
             lines.extend(["", "Orders:"] + ["    " + line for line in orders_df.to_string(index=False).split("\n")])

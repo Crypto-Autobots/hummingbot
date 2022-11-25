@@ -18,10 +18,10 @@ order_amount: 20
 budget_allocation: 50
 
 # The bids level on order book
-bid_level: 3
+bid_level: '2'
 
 # The asks level on order book
-ask_level: 3
+ask_level: '2'
 
 # Bid/Ask levels will be updated in realtime
 realtime_levels_enabled: false

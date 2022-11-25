@@ -10,6 +10,7 @@ from hummingbot.client.config.config_validators import (
 )
 from hummingbot.client.config.config_var import ConfigVar
 from hummingbot.client.settings import AllConnectorSettings, required_exchanges
+from hummingbot.strategy.hunger.types import LevelType
 
 
 def exchange_on_validated(value: str):
@@ -46,6 +47,12 @@ def budget_allocation_prompt() -> str:
     trading_pair = hunger_config_map.get("market").value
     _, quote_asset = trading_pair.split("-")
     return f"What is the budget allocation for {trading_pair} (in {quote_asset})? >>> "
+
+
+def validate_str_for_order_level(value: str) -> Optional[str]:
+    if LevelType.is_valid(value):
+        return None
+    return "Value must be in integer (1, 2, 3...) or percentage format (0.2%, 0.5%, 1%...) >>> "
 
 
 # List of parameters defined by the strategy
@@ -92,19 +99,17 @@ hunger_config_map = {
     ),
     "bid_level": ConfigVar(
         key="bid_level",
-        prompt="What is the bid level on the order book (1 means best bid)? >>> ",
+        prompt="What is the bid level on the order book (1 means best bid, 0.5% means 0.5% from mid price)? >>> ",
         prompt_on_new=True,
-        type_str="int",
-        validator=lambda v: validate_int(v, min_value=1),
-        default=3,
+        validator=lambda v: validate_str_for_order_level(v),
+        default="2",
     ),
     "ask_level": ConfigVar(
         key="ask_level",
-        prompt="What is the ask level on on order book (1 means best ask)? >>> ",
+        prompt="What is the ask level on on order book (1 means best ask, 0.5% means 0.5% from mid price)? >>> ",
         prompt_on_new=True,
-        type_str="int",
-        validator=lambda v: validate_int(v, min_value=1),
-        default=3,
+        validator=lambda v: validate_str_for_order_level(v),
+        default="2",
     ),
     "realtime_levels_enabled": ConfigVar(
         key="realtime_levels_enabled",

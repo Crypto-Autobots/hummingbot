@@ -77,6 +77,7 @@ class HungerStrategy(StrategyPyBase):
         realtime_levels_enabled: bool = False,
         max_order_age: int = 600,
         filled_order_delay: int = 300,
+        order_refresh_tolerance_pct: Decimal = Decimal("0.2"),
         volatility_interval: int = 60,
         avg_volatility_period: int = 5,
         max_volatility: Decimal = DECIMAL_ZERO,
@@ -90,6 +91,7 @@ class HungerStrategy(StrategyPyBase):
         self._realtime_levels_enabled = realtime_levels_enabled
         self._max_order_age = max_order_age
         self._filled_order_delay = filled_order_delay
+        self._order_refresh_tolerance_pct = order_refresh_tolerance_pct
         self._volatility_interval = volatility_interval
         self._avg_volatility_period = avg_volatility_period
         self._max_volatility = max_volatility
@@ -243,7 +245,7 @@ class HungerStrategy(StrategyPyBase):
         return max(amount * Decimal("1.1"), Decimal("5"))
 
     @property
-    def is_within_tolerance(self) -> bool:
+    def is_not_volatile(self) -> bool:
         return (
             not self._volatility.is_nan()
             and type(self._max_volatility) is Decimal
@@ -251,15 +253,23 @@ class HungerStrategy(StrategyPyBase):
         )
 
     @property
+    def is_volatile(self) -> bool:
+        return not self.is_not_volatile
+
+    @property
     def is_time_shield_not_being_activated(self) -> bool:
         return self._create_timestamp < self.current_timestamp
+
+    @property
+    def is_time_shield_being_activated(self) -> bool:
+        return not self.is_time_shield_not_being_activated
 
     @property
     def shields(self) -> pd.DataFrame:
         return pd.DataFrame(
             [
-                ["Time", not self.is_time_shield_not_being_activated],
-                ["Volatility", not self.is_within_tolerance],
+                ["Time", self.is_time_shield_being_activated],
+                ["Volatility", self.is_volatile],
             ],
             columns=[
                 "Shield",
@@ -372,7 +382,7 @@ class HungerStrategy(StrategyPyBase):
         """
         Reallocate quote & base assets to be able to create both BUY and SELL orders
         """
-        if self.is_within_tolerance and self.has_active_orders is False:
+        if self.is_not_volatile and self.has_active_orders is False:
             return
         base_balance = self.market.get_balance(self.base_asset)
         base_balance_in_quote_asset = base_balance * self.best_bid_price
@@ -536,6 +546,56 @@ class HungerStrategy(StrategyPyBase):
                 self.stop_tracking_limit_order(self._market_info, order_id)
                 self.logger().info(f"Order {order_id} is not found. Stop tracking.")
 
+    def _is_within_tolerance(self, proposal: Proposal) -> bool:
+        """
+        False if there are no buys or sells or if the difference between the proposed price and current price is less
+        than the tolerance. The tolerance value is strict max, cannot be equal.
+        """
+        first_buy = proposal.buys[0] if len(proposal.buys) > 0 else None
+        first_sell = proposal.sells[0] if len(proposal.sells) > 0 else None
+        if (self.active_buys and first_buy.size <= 0) or (self.active_sells and first_sell.size <= 0):
+            return False
+        if (
+            self.active_buys
+            and abs(first_buy.price - self.active_buys[0].price) / self.active_buys[0].price
+            > self._order_refresh_tolerance_pct
+        ):
+            return False
+        if (
+            self.active_sells
+            and abs(first_sell.price - self.active_sells[0].price) / self.active_sells[0].price
+            > self._order_refresh_tolerance_pct
+        ):
+            return False
+        return True
+
+    def _is_within_correct_levels(self, proposal: Proposal) -> bool:
+        if self._realtime_levels_enabled is True and proposal is not None:
+            if self.ask_level_type is LevelType.INTEGER:
+                for index, sell in enumerate(self.active_sells):
+                    # prevent index out of range
+                    if index < len(proposal.sells) and sell.price != proposal.sells[index].price:
+                        self.logger().info(
+                            "Sell price at level {} changed {} {}.".format(
+                                index, proposal.sells[index].price, self.quote_asset
+                            )
+                        )
+                        self.logger().info("Cancelled active orders due to realtime_levels_enabled.")
+                        return False
+
+            if self.bid_level_type is LevelType.INTEGER:
+                for index, buy in enumerate(self.active_buys):
+                    # prevent index out of range
+                    if index < len(proposal.buys) and buy.price != proposal.buys[index].price:
+                        self.logger().info(
+                            "Buy price at level {} changed {} {}.".format(
+                                index, proposal.sells[index].price, self.quote_asset
+                            )
+                        )
+                        self.logger().info("Cancelled active orders due to realtime_levels_enabled.")
+                        return False
+        return True
+
     def cancel_active_orders_by_max_order_age(self):
         """
         Cancel active orders if they are older than max age limit
@@ -556,49 +616,25 @@ class HungerStrategy(StrategyPyBase):
 
         # Cancel all active orders by conditions
         if self.has_active_orders is True:
-            len_active_buys = len(self.active_buys)
-            len_active_sells = len(self.active_sells)
-            len_proposal_buys = len(proposal.buys)
-            len_proposal_sells = len(proposal.sells)
-
             # Ensure proposal buys and sells are the same as active buys and sells
-            if len_proposal_buys != len_active_buys or len_proposal_sells != len_active_sells:
+            if len(proposal.buys) != len(self.active_buys) or len(proposal.sells) != len(self.active_sells):
                 should_cancel = True
                 self.logger().info("Cancelled active orders due to proposal updates.")
 
-            # Ensure correct buy/sell levels
-            if should_cancel is False and self._realtime_levels_enabled is True and proposal is not None:
-                for index, sell in enumerate(self.active_sells):
-                    if index == len_proposal_sells:  # prevent index out of range
-                        break
-                    if sell.price != proposal.sells[index].price:
-                        should_cancel = True
-                        self.logger().info(
-                            "Sell price at level {} changed {} {}.".format(
-                                index, proposal.sells[index].price, self.quote_asset
-                            )
-                        )
-                        self.logger().info("Cancelled active orders due to realtime_levels_enabled.")
-                        break
+            # Ensure proposal is within tolerance
+            if should_cancel is False and self._is_within_tolerance(proposal) is False:
+                should_cancel = True
+                self.logger().info("Cancelled active orders due to tolerance.")
 
-                if should_cancel is False:
-                    for index, buy in enumerate(self.active_buys):
-                        if index == len_proposal_buys:  # prevent index out of range
-                            break
-                        if buy.price != proposal.buys[index].price:
-                            should_cancel = True
-                            self.logger().info(
-                                "Buy price at level {} changed {} {}.".format(
-                                    index, proposal.sells[index].price, self.quote_asset
-                                )
-                            )
-                            self.logger().info("Cancelled active orders due to realtime_levels_enabled.")
-                            break
+            # Ensure correct buy/sell levels
+            if should_cancel is False and self._is_within_correct_levels(proposal) is False:
+                should_cancel = True
+                self.logger().info("Cancelled active orders due to incorrect levels.")
 
             # Ensure number of buys and sells are the same
             if (
                 should_cancel is False
-                and len_active_buys != len_active_sells
+                and len(self.active_buys) != len(self.active_sells)
                 and self.current_timestamp - self._created_timestamp > 3
             ):
                 should_cancel = True
@@ -623,7 +659,7 @@ class HungerStrategy(StrategyPyBase):
             and self.has_in_flight_cancels is False
             and self.has_active_orders is False
             and self.is_applied_budget_reallocation is False
-            and self.is_within_tolerance is True
+            and self.is_volatile is False
         )
 
     def execute_orders_proposal(self, proposal: Proposal):

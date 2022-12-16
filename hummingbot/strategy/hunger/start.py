@@ -14,6 +14,7 @@ def start(self):
         realtime_levels_enabled = c_map.get("realtime_levels_enabled").value
         max_order_age = c_map.get("max_order_age").value
         filled_order_delay = c_map.get("filled_order_delay").value
+        order_refresh_tolerance_pct = c_map.get("order_refresh_tolerance_pct").value
         volatility_interval = c_map.get("volatility_interval").value
         avg_volatility_period = c_map.get("avg_volatility_period").value
         max_volatility = c_map.get("max_volatility").value
@@ -33,6 +34,7 @@ def start(self):
             realtime_levels_enabled=realtime_levels_enabled,
             max_order_age=max_order_age,
             filled_order_delay=filled_order_delay,
+            order_refresh_tolerance_pct=order_refresh_tolerance_pct,
             volatility_interval=volatility_interval,
             avg_volatility_period=avg_volatility_period,
             max_volatility=max_volatility,

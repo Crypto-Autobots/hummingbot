@@ -132,6 +132,13 @@ hunger_config_map = {
         validator=lambda v: validate_int(v, min_value=0, inclusive=False),
         default=300,
     ),
+    "order_refresh_tolerance_pct": ConfigVar(
+        key="order_refresh_tolerance_pct",
+        prompt="Enter the percent change in price needed to refresh orders at each cycle (Enter 0.1 to indicate 0.1%) >>> ",
+        type_str="decimal",
+        default=Decimal("0.2"),
+        validator=lambda v: validate_decimal(v, Decimal("-10"), Decimal("10"), inclusive=True),
+    ),
     "volatility_interval": ConfigVar(
         key="volatility_interval",
         prompt="What is an interval, in second, in which to pick historical mid price data from to calculate market volatility? >>> ",

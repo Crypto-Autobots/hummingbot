@@ -32,6 +32,10 @@ max_order_age: 600
 # How long, in second, to sleep after filled order (except filled orders for budget reallocation)
 filled_order_delay: 300
 
+# The spread (from mid price) to defer order refresh process to the next cycle.
+# (Enter 1 to indicate 1%), value below 0, e.g. -1, is to disable this feature - not recommended.
+order_refresh_tolerance_pct: null
+
 # The interval, in second, in which to pick historical mid price data from to calculate market volatility
 # E.g 300 for 5 minutes interval
 volatility_interval: null
